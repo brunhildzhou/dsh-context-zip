@@ -31,7 +31,7 @@ The plugin changes no DSH code. It mounts itself through a bundle patch and take
 - **Host versions**: tested against DSH `0.1.5-rc.2` and `0.1.6-alpha.2`. The package declares `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0`; other 0.1.x versions were not tested individually.
 
 ## Three installation steps
-**Do not install this plugin with `dsh plugin add`.** It ships as three packages (plugin, engine, line redirect); `dsh plugin add` would mount it as a plain bundle without the engine and the redirect, and it would not load. Use `install.mjs` below, and make sure the profile has been started at least once.
+**`dsh plugin add` works and the plugin starts, but compaction will not take effect.** It installs the plugin package only, so the line redirect is missing and the compaction row still resolves to the shipped backend. Use the command below, and make sure the profile has been started at least once; alternatively, press "Wire compaction" in the ContextZip section of the settings panel after starting, then restart the harness.
 
 
 
@@ -49,6 +49,8 @@ The plugin changes no DSH code. It mounts itself through a bundle patch and take
    ```
 
    For example `node install.mjs --profile-dir <harness home>/profiles/web`.
+
+   **You may also install with `dsh plugin add dsh-context-zip`, but that installs the plugin package only.** The panel opens and the plugin starts, yet **compaction does not take effect**: the line redirect is missing. Press "Wire compaction" in the ContextZip section. It writes the redirect into the profile's `node_modules/@deepseek-ai/dsh-compaction-basic/` with the same files and the same guards as `install.mjs` (the target must land inside the profile; a real package already there is refused, not overwritten). On success the status line becomes "Wired" and says "Restart the harness for it to take effect"; the restart is the user's to perform.
 
 3. Restart the host. DSH composes a profile at startup, so the row swap takes effect only on restart.
 
@@ -107,7 +109,7 @@ The per-session override table is read-only in the panel: the only ways to write
 
 ## Verifying it yourself
 
-The plugin ships a runtime check suite. It currently contains 1009 checks. The suite checks the build output, so it has to be pointed at an installed copy. The full description is in `evidence/套件说明.md`; the shortest path is:
+The plugin ships a runtime check suite. It currently contains 1130 checks. The suite checks the build output, so it has to be pointed at an installed copy. The full description is in `evidence/套件说明.md`; the shortest path is:
 
 ```bash
 node build.mjs

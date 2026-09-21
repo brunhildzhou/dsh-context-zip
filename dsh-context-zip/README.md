@@ -10,7 +10,7 @@ node install.mjs --profile-dir <harness home>/profiles/web
 # 装完重启 harness 才生效；卸载用 --uninstall，连插件数据一起清用 --purge
 ```
 
-**不要用 `dsh plugin add`。** 本插件是三个包（插件本体、压缩引擎、行重定向），`dsh plugin add` 只会把它当成普通 bundle 挂上去，缺引擎与重定向，装不起来。原理与全部参数见下面「安装」一节。
+**`dsh plugin add` 可以装，装上也能启动，但压缩不会生效。** 它只装插件本体，缺「行重定向」那一件，于是压缩那一行仍解析到内置后端。用上面那条命令，或启动后在设置面板的 ContextZip 一栏点「接上压缩」补上，再重启 harness。原理与全部参数见下面「安装」一节。
 
 
 ## 它做什么
@@ -25,15 +25,15 @@ node install.mjs --profile-dir <harness home>/profiles/web
 
 ## 目录结构
 
-这是三个包，必须一起装才能生效：
+这是两件，必须一起装才能生效（压缩引擎在插件本体包内，不是独立的第三件）：
 
 | 目录 | 包名 | 作用 |
 |---|---|---|
-| `.` | `dsh-context-zip` | 插件本体：工具、设置面板、HTTP 路由 |
-| `engine/` | `dsh-context-zip-engine` | 压缩后端：继承自带后端，只覆盖摘要那一个钩子 |
+| `.` | `dsh-context-zip` | 插件本体：工具、设置面板、HTTP 路由，压缩引擎在包内 `engine/` |
+| `engine/` | `dsh-context-zip/engine`（包内子路径，不是独立包） | 压缩后端：继承自带后端，只覆盖摘要那一个钩子 |
 | `redirect/` | `@deepseek-ai/dsh-compaction-basic` | 行重定向：让 `compaction-basic` 那一行解析到本插件 |
 
-拆成三个包是被 harness 的机制逼出来的，原因见下一节。
+拆成两件是被 harness 的机制逼出来的：引擎留在插件包内，插件单独装上就能启动，不必再依赖第二个包；重定向则必须单独放一个同名的本地包，原因见下一节。
 
 ## 为什么需要 `redirect/`，以及挂载靠什么
 
@@ -45,7 +45,7 @@ node install.mjs --profile-dir <harness home>/profiles/web
 
 可行做法是让那个包名解析到本插件的引擎，也就是 `redirect/` 这个同名的本地包。行的裸包名由 Node 从**根组合的 baseUrl** 解析，也就是 profile 目录；profile 的 `node_modules` 因此排在 harness 安装之前，profile 本地的同名包就是答案。
 
-`install.mjs` 会从当前安装里复制一份真实的 `base.js` 放进 `redirect/`，于是 `redirect/index.js` 可以继承自带后端而不产生循环依赖。**引擎包本身不 import 那个被顶替的包名**，它通过工厂函数接收基类，这是这次拆分的关键。
+`install.mjs` 会从当前安装里复制一份真实的 `base.js` 放进 `redirect/`，于是 `redirect/index.js` 可以继承自带后端而不产生循环依赖。**引擎本身不 import 那个被顶替的包名**，它通过工厂函数接收基类，这是这次拆分的关键。
 
 ## 压缩模式的按会话切换
 
@@ -114,7 +114,7 @@ node install.mjs --profile-dir <profile 目录>
 node install.mjs --profile-dir <harness home>/profiles/web
 ```
 
-安装参数与 home 推导的完整说明见发布包 `docs/安装与卸载.md`。
+**`dsh plugin add dsh-context-zip` 也能装，但它只装插件本体：面板能打开、插件也能启动，压缩不生效**（缺「行重定向」那一件，压缩那一行仍解析到内置后端）。补上它用设置面板 ContextZip 一栏的「接上压缩」，或者跑上面那条 `install.mjs`。安装参数与 home 推导的完整说明见发布包 `docs/安装与卸载.md`。
 
 卸载：
 
@@ -125,7 +125,7 @@ node install.mjs --profile-dir <profile 目录> --uninstall --home <harness home
 node install.mjs --profile-dir <profile 目录> --purge --home <harness home> --yes-unnamed-home   # 形状认不出时，确认就删这个 home
 ```
 
-`--uninstall` 只清 profile 那一侧（三个包目录加 bundle 清单里的一行），并把保留了什么打在屏幕上：`<harness home>/context-zip/` 下的笔记、模式记录、导出，以及 `settings.yaml` 里的 `context-zip:` 命名空间。`--purge` 连前者一起删；后者没有删除接口，只能手工清。
+`--uninstall` 只清 profile 那一侧（两个目录加 bundle 清单里的一行），并把保留了什么打在屏幕上：`<harness home>/context-zip/` 下的笔记、模式记录、导出，以及 `settings.yaml` 里的 `context-zip:` 命名空间。`--purge` 连前者一起删；后者没有删除接口，只能手工清。
 
 **卸载合同，明确写死：**
 
@@ -140,7 +140,7 @@ node install.mjs --profile-dir <profile 目录> --purge --home <harness home> --
 
 **`--home` 不再能对 `--purge` 指到别人家。** 只要 home 推得出来（含上面第二条：`profiles` 这层是软链、软链目标目录名不是 `profiles` 也算），`--purge` 删的就是**推导出的那个 home** 名下的 `context-zip/`；此时 `--home` 归一化后与它不同就直接**拒绝执行**，报错点名两边分别是哪个目录，并给出该删哪个。判据不再是「`--home` 名下此刻有没有 `context-zip/`」——那只是一个瞬间的文件系统事实，不能拿来给一次递归删除背书。只有 home 彻底推不出来时，`--home` 才是唯一答案，而且此时 `--purge` 还要过下面那道确认。`--uninstall` 不删数据，但它的报告（包括那句「re-run with --purge to remove …」）与 `--purge` 用**同一个**推导结果，不会出现「报告说一个 home、删的是另一个」。`--home` 与推导结果不同又没带 `--purge` 时，脚本会打一行说明它在这里不决定任何事。
 
-**形状认不出 + `--purge`：要显式确认一次（`--yes-unnamed-home`）。** 触发条件是两条同时成立：**两条 home 推导线索都推不出**（路径既不是 `<home>/profiles/<name>`，canonical 路径里也没有一层叫 `profiles`），**且**本次是 `--purge`。此时不带这个开关就**拒绝执行**（退出码非 0），报错把三件事写清：为什么拒绝（形状认不出，`--home` 没有任何推导结果背书）、它会删什么（`<你给的 --home>/context-zip`，**递归删除**，里面是笔记与导出）、下一步怎么做（补上 `--yes-unnamed-home`）。拒绝发生在**任何删除之前**，所以被拒时 profile 里的三个包目录也原封不动，补上开关重跑才算数。只给开关不给 `--home` 同样拒绝：开关只能确认一个由 `--home` 指名的 home，不能替它命名。带上开关后照 `--home` 删，并照旧打印 `note … so --home X is used as given`。形状能推出 home 时（正常布局、`profiles` 是软链的 L 布局）以及 `--uninstall`，这个开关**不参与判据**，不带也照旧；它也不会解锁上一条那个「`--home` 指到别人家」的守卫。
+**形状认不出 + `--purge`：要显式确认一次（`--yes-unnamed-home`）。** 触发条件是两条同时成立：**两条 home 推导线索都推不出**（路径既不是 `<home>/profiles/<name>`，canonical 路径里也没有一层叫 `profiles`），**且**本次是 `--purge`。此时不带这个开关就**拒绝执行**（退出码非 0），报错把三件事写清：为什么拒绝（形状认不出，`--home` 没有任何推导结果背书）、它会删什么（`<你给的 --home>/context-zip`，**递归删除**，里面是笔记与导出）、下一步怎么做（补上 `--yes-unnamed-home`）。拒绝发生在**任何删除之前**，所以被拒时 profile 里的包目录也原封不动，补上开关重跑才算数。只给开关不给 `--home` 同样拒绝：开关只能确认一个由 `--home` 指名的 home，不能替它命名。带上开关后照 `--home` 删，并照旧打印 `note … so --home X is used as given`。形状能推出 home 时（正常布局、`profiles` 是软链的 L 布局）以及 `--uninstall`，这个开关**不参与判据**，不带也照旧；它也不会解锁上一条那个「`--home` 指到别人家」的守卫。
 
 **写删一律先确认落在 profile 内。** 软链对读写方是透明的：`cp`、`writeFile` 会跟过去，递归 `rm` 会在软链指向的地方删，而 profile 里「某个包名是软链」是常见布局。现在的做法是先把 `<profile>/node_modules` 的真实路径解析一次并通过守卫（**一次判定覆盖整棵子树**：逐条路径各自 realpath 不构成闭包，`node_modules` 指外、里面两个包名指回 profile 内就能骗过每一条），之后所有安装目标都相对这个真实路径拼，并在落地前把**已有的那一段逐级展开**再确认不会指到 profile 外；`<profile>/package.json` 这个文件单独查（它可能自己就是一条指到外面的软链）；卸载分支对 plugin、engine、redirect 三个目录逐个查；`--purge` 的 `context-zip/` 走上面那条 home 判据。拒绝发生在任何写入或删除之前，报错会点名是哪条路径、展开到哪里、以及改法。合法的软链布局（指向 profile 内的包软链、`node_modules` 本身指到 profile 内的 `vendor/`、profile 目录自身是软链）照常安装。
 
@@ -154,7 +154,7 @@ node install.mjs --profile-dir <profile 目录> --check
 
 `redirect/base.js` 是安装那一刻从内置后端复制的快照。升级 harness 会换掉内置后端，而这个副本不会自己更新，插件会继续按旧后端的逻辑压。`--check` 把副本里的版本戳和今天解析到的版本比一下，落后就报 STALE 并以退出码 1 结束。
 
-脚本做三件事，都是纯文件复制，删掉三个目录就完全回退：把三个包复制进 profile 的 `node_modules`，把 `dsh-context-zip` 加进 profile 的 `dsh.profile.bundles`，并把真实后端的入口复制成 `redirect/base.js`。
+脚本做三件事，都是纯文件复制，删掉两个目录就完全回退：把插件本体（连包内的引擎）与行重定向复制进 profile 的 `node_modules`，把 `dsh-context-zip` 加进 profile 的 `dsh.profile.bundles`，并把真实后端的入口复制成 `redirect/base.js`。
 
 装完需要重启 harness 才会换行生效。
 
@@ -178,15 +178,15 @@ npm install
 
 `build.mjs` 需要 esbuild。它先找本目录的 `node_modules/esbuild`，找不到就退到 npm 缓存里的 `npx` 副本。
 
-`typescript` 与 `@types/node` 只服务 `npm run typecheck`。类型检查必须能解析 `@deepseek-ai/*`，这些包由 `peerDependencies` 在 `npm install` 时一并装上；`tsconfig.json` 里的 `paths` 把 `dsh-context-zip-engine` 指回仓库内的 `engine/*.ts`，所以检查的是源码而不是构建产物。
+`typescript` 与 `@types/node` 只服务 `npm run typecheck`。类型检查必须能解析 `@deepseek-ai/*`，这些包由 `peerDependencies` 在 `npm install` 时一并装上；`tsconfig.json` 里的 `paths` 把 `dsh-context-zip/engine` 指回仓库内的 `engine/*.ts`，所以检查的是源码而不是构建产物。
 
-`build.mjs` 会往 `node_modules/` 写一个指向 `engine/` 的软链接，这是本地构建能解析 `dsh-context-zip-engine` 的原因；真实 profile 解析的是装好的包。
+引擎就在插件本体包内，插件与重定向都通过包自身的 `dsh-context-zip/engine` 子路径引用它，所以进程里一定是同一份；构建时这个说明符保持 external，不内联。
 
-**引擎包按外部依赖构建**（和 `@deepseek-ai/*` 一样，不 inline 进插件产物）。重定向那一行和插件本体都解析同一份装好的引擎，进程里因此只有一个引擎模块，插件注册的模块级 notes 读取器就是被挂载的那个引擎读到的那个。把引擎 inline 进来会让插件带上第二份私有副本，两份模块状态互不可见，插件写给引擎的东西引擎永远收不到。
+**引擎按外部依赖构建**（和 `@deepseek-ai/*` 一样，不 inline 进插件产物）。重定向那一行和插件本体都解析同一份引擎，进程里因此只有一个引擎模块，插件注册的模块级 notes 读取器就是被挂载的那个引擎读到的那个。把引擎 inline 进来会让插件带上第二份私有副本，两份模块状态互不可见，插件写给引擎的东西引擎永远收不到。
 
-`test/run.mjs` 检查的是**构建产物**而不是 TypeScript 源码，所以打包出错也会被测出来。共 1009 项（同时给出 `--installed` 与 `--deliverable` 两个参数时的数；不接 `--deliverable` 时是 1006 项），覆盖：分叉会话的段号是否只数自己的压缩、段号与摘要事件号的对应、按事件号找所属段、三种消息载荷（用户消息、助手消息、工具结果）的转写投影、转写超预算的截断标记、分叉划界的三种来源优先级、笔记关键词搜索的逐词有序匹配与预算、导出命令的注册形状与参数默认、导出文档的文件名与元信息字段与原文排序、模式查表的两级优先级与来源判定、按会话分流的四条路径（默认委托、插件路径、行配置覆盖上限、读取器缺失时的回退）、分叉会话的日志读取优先级与回退，搜索下界的取值与游标的自包含（翻页跨增长、跨插入搜索、跨重新铸造都不重页），转录预算的精确适配（单条目与多条目），以及笔记裁剪的三种损失情形。
+`test/run.mjs` 检查的是**构建产物**而不是 TypeScript 源码，所以打包出错也会被测出来。共 1130 项（同时给出 `--installed` 与 `--deliverable` 两个参数时的数；不接 `--deliverable` 时是 1127 项），覆盖：分叉会话的段号是否只数自己的压缩、段号与摘要事件号的对应、按事件号找所属段、三种消息载荷（用户消息、助手消息、工具结果）的转写投影、转写超预算的截断标记、分叉划界的三种来源优先级、笔记关键词搜索的逐词有序匹配与预算、导出命令的注册形状与参数默认、导出文档的文件名与元信息字段与原文排序、模式查表的两级优先级与来源判定、按会话分流的四条路径（默认委托、插件路径、行配置覆盖上限、读取器缺失时的回退）、分叉会话的日志读取优先级与回退，搜索下界的取值与游标的自包含（翻页跨增长、跨插入搜索、跨重新铸造都不重页），转录预算的精确适配（单条目与多条目），以及笔记裁剪的三种损失情形。
 
-因为构建产物把 `@deepseek-ai/*` 和引擎包保持为外部依赖，检查必须对着**能解析这些包名的**那棵树跑；本仓库自身不含 harness，所以加 `--installed <插件安装目录>` 指向一份装好的副本。装到 profile 之后这样跑：
+因为构建产物把 `@deepseek-ai/*` 和引擎保持为外部依赖，检查必须对着**能解析这些包名的**那棵树跑；本仓库自身不含 harness，所以加 `--installed <插件安装目录>` 指向一份装好的副本。装到 profile 之后这样跑：
 
 ```bash
 node test/run.mjs --installed <profile>/node_modules/dsh-context-zip
