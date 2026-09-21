@@ -17,13 +17,13 @@
   },
   "files": [
     "lib",
-    "engine",
+    "engine/lib",
+    "engine/package.json",
     "redirect",
-    "test",
-    "build.mjs",
     "install.mjs",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "node build.mjs",
