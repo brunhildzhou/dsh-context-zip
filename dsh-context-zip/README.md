@@ -2,6 +2,17 @@
 
 一个给 DeepSeek Harness 用的上下文压缩插件。它替换掉自带的压缩摘要器，改成五段式交接摘要，并把每次压缩掉的内容做成可回查的分段目录。
 
+## 快速开始
+
+```bash
+# 前提：这个 profile 至少启动过一次（宿主包在首次启动时才生成）
+node install.mjs --profile-dir <harness home>/profiles/web
+# 装完重启 harness 才生效；卸载用 --uninstall，连插件数据一起清用 --purge
+```
+
+**不要用 `dsh plugin add`。** 本插件是三个包（插件本体、压缩引擎、行重定向），`dsh plugin add` 只会把它当成普通 bundle 挂上去，缺引擎与重定向，装不起来。原理与全部参数见下面「安装」一节。
+
+
 ## 它做什么
 
 - **五段式摘要**：压缩时不再让模型自由发挥，而是按 `Goal and intent` / `Decisions` / `Current state` / `Next steps` / `Anchors` 五段产出。软目标 3072 token，硬上限 6144。

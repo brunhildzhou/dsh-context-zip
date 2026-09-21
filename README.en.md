@@ -31,6 +31,9 @@ The plugin changes no DSH code. It mounts itself through a bundle patch and take
 - **Host versions**: tested against DSH `0.1.5-rc.2` and `0.1.6-alpha.2`. The package declares `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0`; other 0.1.x versions were not tested individually.
 
 ## Three installation steps
+**Do not install this plugin with `dsh plugin add`.** It ships as three packages (plugin, engine, line redirect); `dsh plugin add` would mount it as a plain bundle without the engine and the redirect, and it would not load. Use `install.mjs` below, and make sure the profile has been started at least once.
+
+
 
 1. Build.
 
