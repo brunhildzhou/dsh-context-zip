@@ -28,6 +28,7 @@ The plugin changes no DSH code. It mounts itself through a bundle patch and take
 - **Node.js**: `^22.19.0 || >=24.0.0` (see `engines` in `dsh-context-zip/package.json`).
 - **Host-provided packages**: `@deepseek-ai/cordis`, `@deepseek-ai/dsh-agent`, `@deepseek-ai/dsh-commands`, `@deepseek-ai/dsh-compaction`, `@deepseek-ai/dsh-compaction-basic`, `@deepseek-ai/dsh-home-paths`, `@deepseek-ai/dsh-llm`, `@deepseek-ai/dsh-session`, `@deepseek-ai/dsh-session-query`, `@deepseek-ai/dsh-settings`, `@deepseek-ai/dsh-system-prompt`, `@deepseek-ai/dsh-token-meter`, `@deepseek-ai/dsh-tools`, `@deepseek-ai/schemastery`, and `react`. These are `peerDependencies`, resolved from the profile's `node_modules`; they are not installed along with this plugin.
 - **Install precondition**: `install.mjs` has to find a real `@deepseek-ai/dsh-compaction-basic` on the profile's resolution path so that it can copy a `base.js`. That package is normally supplied by `$DSH_HOME/profiles/node_modules`, and the harness creates that directory on its first start. A brand-new profile that has never been started must be started once before installation.
+- **Host versions**: tested against DSH `0.1.5-rc.2` and `0.1.6-alpha.2`. The package declares `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0`; other 0.1.x versions were not tested individually.
 
 ## Three installation steps
 

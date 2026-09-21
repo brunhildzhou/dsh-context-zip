@@ -28,6 +28,7 @@ DSH 在上下文接近窗口上限时会压缩会话。默认实现让模型自�
 - **Node.js**：`^22.19.0 || >=24.0.0`（见 `dsh-context-zip/package.json` 的 `engines`）。
 - **宿主提供的包**：`@deepseek-ai/cordis`、`@deepseek-ai/dsh-agent`、`@deepseek-ai/dsh-commands`、`@deepseek-ai/dsh-compaction`、`@deepseek-ai/dsh-compaction-basic`、`@deepseek-ai/dsh-home-paths`、`@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-session`、`@deepseek-ai/dsh-session-query`、`@deepseek-ai/dsh-settings`、`@deepseek-ai/dsh-system-prompt`、`@deepseek-ai/dsh-token-meter`、`@deepseek-ai/dsh-tools`、`@deepseek-ai/schemastery`、`react`。这些都是 `peerDependencies`，由 profile 的 `node_modules` 解析，不随本插件安装。
 - **安装前提**：`install.mjs` 需要在 profile 的解析路径上找到真实的 `@deepseek-ai/dsh-compaction-basic`，才能复制一份 `base.js`。该包通常由 `$DSH_HOME/profiles/node_modules` 提供，而这个目录是 DSH 首次启动时才生成的。从未启动过的全新 profile 先启动一次再装。
+- **宿主版本**：实测通过的是 DSH `0.1.5-rc.2` 与 `0.1.6-alpha.2`；`package.json` 里声明接受 `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0`（其余 0.1.x 版本未逐一实测）。
 
 ## 安装三步
 
