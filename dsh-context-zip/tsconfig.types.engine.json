@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "preserveSymlinks": true,
+    "rootDir": "engine",
+    "outDir": "engine/lib/types"
+  },
+  "include": ["engine/**/*.ts"]
+}

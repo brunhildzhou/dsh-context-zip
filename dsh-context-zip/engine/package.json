@@ -1,0 +1,19 @@
+{
+  "name": "dsh-context-zip-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The compaction backend of dsh-context-zip: the shipped basic backend with a five-section, notes-aware summarizer. Split into its own package so the row-redirect package can import it without a cycle.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./prompt": "./lib/prompt.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib"],
+  "peerDependencies": {
+    "@deepseek-ai/dsh-compaction-basic": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-llm": "^0.1.5-rc.2"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "strict": false,
+    "noImplicitAny": false,
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": false,
+    "esModuleInterop": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "baseUrl": ".",
+    "paths": {
+      "dsh-context-zip-engine": ["./engine/index.ts"],
+      "dsh-context-zip-engine/prompt": ["./engine/prompt.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "engine/**/*.ts", "client/**/*.ts", "test/entry.ts", "redirect/index.js"],
+  "exclude": ["node_modules", "lib", "engine/lib", "test/build"]
+}

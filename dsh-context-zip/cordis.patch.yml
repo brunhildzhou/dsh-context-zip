@@ -1,0 +1,18 @@
+# dsh-context-zip bundle patch: mount the plugin's own host half.
+#
+# A bundle patch is the only thing that mounts a plugin package, so a bundle
+# whose patch list is empty contributes nothing at all: its `apply()` never runs,
+# and with it go the review tools, the settings routes, the notes store, the
+# resident guidance, and the pressure reminder.
+#
+# This layer cannot retarget the `compaction-basic` row, and does not try to.
+# `@deepseek-ai/cordis-plugin-include` treats a row's `name` as a guard compared
+# against the layer below, never as an override. That row is taken over instead
+# by resolving its own specifier to the profile-local copy of
+# `@deepseek-ai/dsh-compaction-basic` that `install.mjs` puts in place, which is
+# why the engine is a separate package the redirect calls into.
+#
+# The row below carries the other half: the plugin package itself.
+- insert:
+    - id: dsh-context-zip
+      name: dsh-context-zip

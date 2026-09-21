@@ -1,0 +1,13 @@
+# 依赖与构建时的临时物（发布副本有意带上 lib/、engine/lib/、test/build/，不要忽略它们）
+node_modules/
+*.log
+
+# 编辑器与系统文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 本地跑批留下的
+/tmp/
+*.tmp

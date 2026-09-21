@@ -1,0 +1,8 @@
+# 一律用 LF 检出，避免在 Windows 上把脚本改成 CRLF（安装器与套件是 node 直接跑的）
+* text=auto eol=lf
+
+# 这些是生成物，diff 噪音大，按二进制处理
+lib/client.js linguist-generated=true
+lib/index.js linguist-generated=true
+engine/lib/** linguist-generated=true
+test/build/** linguist-generated=true

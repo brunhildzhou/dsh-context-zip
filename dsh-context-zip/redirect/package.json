@@ -1,0 +1,13 @@
+{
+  "name": "@deepseek-ai/dsh-compaction-basic",
+  "version": "0.1.0-context-zip",
+  "private": true,
+  "description": "Profile-local redirect of the compaction-basic row to dsh-context-zip-engine. Contains no compaction code of its own.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "license": "MIT"
+}
