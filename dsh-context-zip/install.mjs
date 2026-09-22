@@ -828,7 +828,16 @@ await mkdir(join(profileDir, 'node_modules'), { recursive: true });
 const DEV_ONLY = /[\\/](node_modules|\.git|graphify-out)([\\/]|$)/u;
 await cp(here, pluginDir, {
   recursive: true,
-  filter: (source) => !DEV_ONLY.test(source) && !source.endsWith('install.mjs'),
+  // The filter is asked about the root as well, and the root can itself live under a
+  // `node_modules` directory: that is exactly where npm and pnpm put an installed
+  // copy. Testing the absolute path rejects the root, skips the whole copy, and
+  // leaves the profile with the plugin directory deleted (it was removed just above)
+  // while still printing a success line. Test the path relative to the root instead.
+  filter: (source) => {
+    const inner = relative(here, source);
+    if (inner === '') return true;
+    return !DEV_ONLY.test(inner) && !source.endsWith('install.mjs');
+  },
 });
 // The engine is not copied on its own: it lives inside the plugin directory and
 // the plugin imports it through `dsh-context-zip/engine`.
