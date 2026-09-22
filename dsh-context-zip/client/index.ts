@@ -10,7 +10,7 @@
  */
 
 import * as React from 'react';
-import { LIVE_POLL_MS, SAVE_FEEDBACK_MS, clockText, helpBubblePlacement, initialLiveHealth, liveHealthAfter, mergeLivePayload, modeClickIntent, sameSettings, saveButtonEnabled, saveButtonFace, startLivePoll, startModeReadRetry, titlesFrom, toRows } from './live.ts';
+import { LIVE_POLL_MS, SAVE_FEEDBACK_MS, clockText, helpBubblePlacement, initialLiveHealth, liveHealthAfter, mergeLivePayload, modeClickIntent, sameSettings, saveButtonEnabled, saveButtonFace, startLivePoll, startModeReadRetry, titlesFrom, toRows, wireFace, wireStatusFrom, wireText } from './live.ts';
 // 两条长说明只有一处原文：`src/panel-copy.ts`，schema 的 `description` 也引它。面板与
 // `settings.yaml` 里读到的那段话因此不可能各说各话（台账 B3 的口径）。
 import { FALLBACK_ENABLED_COPY, REWRITE_ENABLED_COPY } from '../src/panel-copy.ts';
@@ -49,6 +49,14 @@ const MODE_ROUTE = '/dsh-context-zip/mode';
 
 /** Host route listing the models registered with DSH right now. */
 const MODELS_ROUTE = '/dsh-context-zip/models';
+
+/**
+ * Host route reporting — and performing — the wiring of the compaction row.
+ *
+ * The read is a `GET`, the action a `POST` on the same path: one route, one
+ * subject, and the panel never has to reason about two.
+ */
+const WIRE_ROUTE = '/dsh-context-zip/wire';
 
 /**
  * Where this browser remembers, per session, the mode it last read.
@@ -170,6 +178,37 @@ const ZH = {
   methodLabel: '新建会话默认压缩方式',
   methodPlugin: 'ContextZip',
   methodDefault: '内置后端',
+  // ── 压缩后端：压缩那一行由谁接管（`dsh plugin add` 装的人默认没有接管）。
+  // 一行标题加一颗问号，中间是主行加副行，右端按钮只在还能做事时出现。九态各有一套
+  // 主副行，判定顺序在 `client/live.ts` 的 `wireStatusFrom`；这里只有文字。
+  rowTitle: '压缩后端',
+  help: '插件接管压缩后才生效，接管后需重启一次 harness。',
+  inactiveMain: '未生效',
+  inactiveSub: '内置压缩正在工作',
+  takeover: '接管',
+  takingMain: '正在接管',
+  takingSub: '请稍候',
+  activeMain: '已生效',
+  activeSubPrefix: '基于内置',
+  // 戳里没有版本时的兜底句：副行要印版本，缺字段就用这一句，不留空位。
+  versionUnknown: '版本未知',
+  updateMain: '待更新',
+  // 两个版本都可能缺席：快照由 `wireText` 兜成「版本未知」，当前版本没有兜底句，所以这里
+  // 把空的那一段连同它的分隔符一起去掉，而不是印出 `内置 ，快照 …` 或尾随的逗号。
+  updateTpl: (current, snapshot) => {
+    const parts = [current.length > 0 ? `内置 ${current}` : '', snapshot.length > 0 ? `快照 ${snapshot}` : '', '重接一次即可'];
+    return parts.filter((part) => part.length > 0).join('，');
+  },
+  reconnect: '重新接管',
+  restartMain: '等待重启',
+  restartSub: '下次启动时生效',
+  takenSub: '该位置已有其他实现，保持不动',
+  incompleteMain: '接管不完整',
+  incompleteSub: '重试一次即可恢复',
+  unknownMain: '状态未知',
+  unknownSub: '刚才没有读到',
+  failMain: '接管失败',
+  retry: '重试',
   // ── 已生效会话（只读）
   agentsSection: '已生效会话',
   showMore: '显示更多',
@@ -252,6 +291,38 @@ const EN = {
   methodLabel: 'Compaction method for new sessions',
   methodPlugin: 'ContextZip',
   methodDefault: 'Shipped backend',
+  // Compaction backend: who took over the compaction row. One title with its
+  // question mark, a main line and a sub line in the middle, and a button on the
+  // right only while there is still something to do.
+  rowTitle: 'Compaction',
+  help: 'Takeover is required for this plugin to work. Restart once after takeover.',
+  inactiveMain: 'Inactive',
+  inactiveSub: 'Built-in compaction is active',
+  takeover: 'Take over',
+  takingMain: 'Taking over',
+  takingSub: 'One moment',
+  activeMain: 'Active',
+  activeSubPrefix: 'Based on built-in',
+  // Fallback for a stamp that carries no version: the sub line must print one,
+  // and an empty slot is not a version.
+  versionUnknown: 'version unknown',
+  updateMain: 'Update available',
+  // Same guard as the Chinese table: a part that is not there is dropped with its
+  // separator, so the line can never read `Built-in , snapshot …`.
+  updateTpl: (current, snapshot) => {
+    const parts = [current.length > 0 ? `Built-in ${current}` : '', snapshot.length > 0 ? `snapshot ${snapshot}` : '', 'reconnect to follow'];
+    return parts.filter((part) => part.length > 0).join(', ');
+  },
+  reconnect: 'Reconnect',
+  restartMain: 'Restart required',
+  restartSub: 'Takes effect on next launch',
+  takenSub: 'That slot is already taken, left untouched',
+  incompleteMain: 'Incomplete',
+  incompleteSub: 'One retry restores it',
+  unknownMain: 'Unknown',
+  unknownSub: 'Could not read the status',
+  failMain: 'Could not take over',
+  retry: 'Retry',
   agentsSection: 'Sessions in effect',
   showMore: 'Show more',
   emptyList: 'None',
@@ -429,6 +500,8 @@ const ICON_CHEVRON =
 function ContextZipSection(props) {
   const { close, ctx } = props ?? {};
   const strings = useStrings();
+  // 只给「压缩后端」那一行用：已生效副行里版本与时间之间的那个逗号，中文全角、英文半角。
+  const locale = React.useContext(LocaleContext);
   const [state, setState] = React.useState<SettingsState>({
     status: 'loading',
     value: null,
@@ -468,6 +541,30 @@ function ContextZipSection(props) {
    */
   const [liveHealth, setLiveHealth] = React.useState(() => initialLiveHealth(Date.now()));
   /**
+   * 压缩后端那一行的原始读数：压缩那一行有没有真的由本插件接管。
+   *
+   * 与设置值分开一个 state，因为它不是设置：它描述的是 profile 里那份重定向包在不在，
+   * 而那份包由服务器写文件决定，不由 `settings.yaml` 决定。**存的是载荷本身**，不是
+   * 算好的脸：九态的判定要同时看这份载荷与下面那个动作位，两者任一变化都要重算，所以
+   * 判定放在渲染处由 `wireStatusFrom` 现算（`client/live.ts`）。「等待重启」也不再问
+   * `/live` 的 `effective`：它比的是这份载荷里的 `copiedAt` 与 `processStartedAt`，
+   * 所以这一行不需要为它多发一个请求。
+   *
+   * `null` 表示这一次面板打开还没读到答案，界面上是「读取中」那一态。
+   */
+  const [wire, setWire] = React.useState(null);
+  /**
+   * 接管动作自己的状态，与读数分开。
+   *
+   * `'taking'` 是接管请求已经发出、还没回来；`'failed'` 是那次请求被服务端拒了或网络层
+   * 失败，原因原样存在载荷的 `error` 里。两者都不是读数能表达的事实，所以由面板自己记；
+   * 读数成功回来后清成 `null`。
+   *
+   * 发请求前会把载荷里的 `wired` 乐观置真：判定顺序里「未生效」排在「接管中」前面
+   * （见 `wireStatusFrom` 的说明），不乐观置真就永远读不到「正在接管」这一态。
+   */
+  const [wireAction, setWireAction] = React.useState(null);
+  /**
    * 两组只读列表各自的显示条数：默认 10，每点一次「显示更多」加 10，可重复。
    *
    * 总条数不超过 10 时按钮不渲染；状态只活在本次面板打开期内——关掉再进是重挂载，
@@ -477,7 +574,7 @@ function ContextZipSection(props) {
   const [retrievalLimit, setRetrievalLimit] = React.useState(LIST_PAGE);
   /** 「实验与排障」折叠区默认收起。 */
   const [experimentOpen, setExperimentOpen] = React.useState(false);
-  /** 问号气泡：同时只开一个，值是 `'fallback'` / `'rewrite'` / `null`。 */
+  /** 问号气泡：同时只开一个，值是 `'wire'` / `'fallback'` / `'rewrite'` / `null`。 */
   const [help, setHelp] = React.useState(null);
   /** 刚复制成功的那一行 id；1.5 秒后清掉，图标从对勾回到复制形。 */
   const [copiedId, setCopiedId] = React.useState(null);
@@ -485,6 +582,7 @@ function ContextZipSection(props) {
   const [tip, setTip] = React.useState(null);
   const bubbleRef = React.useRef(null);
   const tipRef = React.useRef(null);
+  const helpWireRef = React.useRef(null);
   const helpFallbackRef = React.useRef(null);
   const helpRewriteRef = React.useRef(null);
   const tipTimer = React.useRef(null);
@@ -572,6 +670,65 @@ function ContextZipSection(props) {
   }, []);
 
   /**
+   * 读一次压缩后端的接管状态。
+   *
+   * 只读一次，不进轮询：接管状态在一次面板打开期内不会自己变化——写它的只有那颗按钮，
+   * 而按钮自己会把答案放进同一个 state。这条读也被「状态未知」那一态的「重试」用：
+   * 那说明上一次没读到，再读一次就是它唯一能做的事。
+   *
+   * 失败（网络层抛错或 `ok: false`）都落成一份 `ok: false` 的载荷，九态判定把它读成
+   * 「状态未知」，不假装「未生效」——那会让用户点一颗注定失败的按钮。失败的具体原因不在
+   * 这一行显示（未知态的副行是「刚才没有读到」），下一次读有机会拿到真答案。
+   */
+  const readWire = React.useCallback(async () => {
+    try {
+      const data = await fetch(WIRE_ROUTE).then((response) => response.json());
+      setWire(data);
+    } catch (error) {
+      setWire({ ok: false, error: String(error?.message ?? error) });
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void readWire();
+  }, [readWire]);
+
+  /**
+   * 按下「接管」：POST 一次，把压缩那一行接到本插件。
+   *
+   * 面板只负责发这一次请求与显示答案：写什么文件、写进哪个 profile、目标被别人占着怎么办，
+   * 全在宿主侧的 `/dsh-context-zip/wire`。成功后**不重启**任何东西——重启必须由用户手动做，
+   * 所以「下次启动时生效」是文字，不是插件从进程内重启。
+   *
+   * 发请求前把载荷乐观置成已接管、并挂上 `'taking'`：九态的判定顺序里「未生效」在
+   * 「接管中」前面（见 `wireStatusFrom`），不乐观置真，按钮按下去界面会停在未生效。
+   * 请求回来无论成功载荷还是拒绝原因都盖掉这份乐观值；拒绝原因原样存在载荷的 `error` 里，
+   * 「接管失败」的副行只印它。
+   */
+  const wireRow = React.useCallback(async () => {
+    setWireAction('taking');
+    setWire((current) => ({ ...(current ?? {}), ok: true, wired: true, foreign: false, partial: false }));
+    try {
+      const response = await fetch(WIRE_ROUTE, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await response.json();
+      if (data?.ok === true && data.wired === true) {
+        setWire(data);
+        setWireAction(null);
+        return;
+      }
+      setWire((current) => ({ ...(current ?? {}), ok: true, wired: true, error: String(data?.error ?? 'unavailable') }));
+      setWireAction('failed');
+    } catch (error) {
+      setWire((current) => ({ ...(current ?? {}), ok: true, wired: true, error: String(error?.message ?? error) }));
+      setWireAction('failed');
+    }
+  }, []);
+
+  /**
    * 读一次注册表里的模型清单。
    *
    * 每次打开面板、以及每次把格式改写开关拨到打开时读一次，读的是宿主侧的
@@ -599,7 +756,12 @@ function ContextZipSection(props) {
    */
   React.useEffect(() => {
     if (help === null) return void 0;
-    const anchor = help === 'fallback' ? helpFallbackRef.current : helpRewriteRef.current;
+    const anchor =
+      help === 'fallback'
+        ? helpFallbackRef.current
+        : help === 'rewrite'
+          ? helpRewriteRef.current
+          : helpWireRef.current;
     const bubble = bubbleRef.current;
     if (anchor === null || bubble === null) return void 0;
     const place = () => {
@@ -1017,6 +1179,79 @@ function ContextZipSection(props) {
     );
 
   /**
+   * 「压缩后端」这一行：左标题（含问号气泡）、中主副行、右按钮，是「压缩方式」组的第一行。
+   *
+   * 结构固定三样：标题在最左，主行加副行占中间（状态点带在主行行首），按钮贴最右。按钮的
+   * 右缘与同一组里分段控件的右缘对齐——两者都是所在行最后一个伸缩项，行宽相同，所以对齐由
+   * 布局本身保证，不靠额外定位。
+   *
+   * 状态由 `wireStatusFrom` 现算：它要同时看这份载荷与动作位，两者任一变化都要重算；
+   * 「等待重启」的正向证据是载荷里的 `copiedAt` 与 `processStartedAt`，不再读 `/live` 的
+   * `effective`。文字、按钮标签与按钮的有无由 `wireText` 拼，点的脸由 `wireFace`
+   * 决定（都在 `client/live.ts`，无 react 依赖、可单测），样式表只按 `data-face` 上色换形状。
+   *
+   * 按钮的缺席是规格的一部分：已生效、等待重启、被占用三态没有可做的事，`action` 为空串，
+   * 按钮整个不渲染；行本身常驻，主副行照旧，所以行高与有按钮时一致。接管在飞时按钮禁用，
+   * 防同一次接管发两次 POST。
+   */
+  const renderWireRow = () => {
+    const status = wire === null ? 'loading' : wireStatusFrom(wire, wireAction);
+    const face = wireFace(status);
+    const copy = wireText(status, wire, strings, locale);
+    const busyNow = status === 'taking';
+    // 未知态的按钮是重读，其余有按钮的态都是重写；两条落点见 `readWire` 与 `wireRow`。
+    const click = status === 'unknown' ? () => void readWire() : () => void wireRow();
+    return React.createElement(
+      'div',
+      { className: 'dsh-context-zip__wire', 'data-status': status, 'data-face': face, 'aria-busy': busyNow ? 'true' : 'false' },
+      React.createElement(
+        'span',
+        { className: 'dsh-context-zip__wire-title' },
+        React.createElement('span', { className: 'dsh-context-zip__row-label' }, strings.rowTitle),
+        React.createElement(
+          'button',
+          {
+            type: 'button',
+            className: 'dsh-context-zip__help',
+            ref: helpWireRef,
+            'aria-label': strings.help,
+            'aria-expanded': help === 'wire' ? 'true' : 'false',
+            'aria-describedby': 'dsh-context-zip-help-wire',
+            onClick: (event) => {
+              event.stopPropagation();
+              setHelp((open) => (open === 'wire' ? null : 'wire'));
+            },
+          },
+          React.createElement('span', { dangerouslySetInnerHTML: { __html: ICON_HELP } }),
+        ),
+      ),
+      React.createElement(
+        'span',
+        { className: 'dsh-context-zip__wire-body', role: 'status', 'aria-live': 'polite' },
+        React.createElement(
+          'span',
+          { className: 'dsh-context-zip__wire-main' },
+          React.createElement('span', { className: 'dsh-context-zip__wire-dot', 'data-face': face, 'aria-hidden': 'true' }),
+          React.createElement('span', { className: 'dsh-context-zip__wire-main-text' }, copy.main),
+        ),
+        React.createElement('span', { className: 'dsh-context-zip__wire-sub' }, copy.sub),
+      ),
+      copy.action === ''
+        ? null
+        : React.createElement(
+            'button',
+            {
+              type: 'button',
+              className: 'dsh-context-zip__btn dsh-context-zip__btn--outline dsh-context-zip__wire-btn',
+              disabled: busyNow,
+              onClick: click,
+            },
+            copy.action,
+          ),
+    );
+  };
+
+  /**
    * 标题行那颗唯一的保存按钮。
    *
    * 四个脸：`save`（草稿脏了、可点）/ `saving`（写入在飞，禁用）/ `check`（存成功，
@@ -1149,6 +1384,10 @@ function ContextZipSection(props) {
         React.createElement(
           'div',
           { className: 'dsh-context-zip__rows' },
+          // 压缩后端那一行是这一组的第一行，排在「新建会话默认压缩方式」上面：先回答
+          // 「压缩那一行被本插件接管了没有」，再回答「选谁压」。`dsh plugin add` 装出来的
+          // profile 正好是「选得了、没接管」，把它放下面会让只扫第一行的人以为已经生效。
+          renderWireRow(),
           renderSegRow(
             'dsh-context-zip-method',
             strings.methodLabel,
@@ -1406,7 +1645,7 @@ function ContextZipSection(props) {
         key: 'bubble',
         'data-show': help === null ? 'false' : 'true',
       },
-      help === null ? '' : help === 'fallback' ? strings.fallbackHint : strings.rewriteHint,
+      help === null ? '' : help === 'fallback' ? strings.fallbackHint : help === 'rewrite' ? strings.rewriteHint : strings.help,
     ),
     React.createElement(
       'div',
@@ -1419,6 +1658,7 @@ function ContextZipSection(props) {
       },
       tip === null ? '' : tip.text,
     ),
+    React.createElement('div', { id: 'dsh-context-zip-help-wire', key: 'help-wire', hidden: true }, strings.help),
     React.createElement('div', { id: 'dsh-context-zip-help-fallback', key: 'help-fallback', hidden: true }, strings.fallbackHint),
     React.createElement('div', { id: 'dsh-context-zip-help-rewrite', key: 'help-rewrite', hidden: true }, strings.rewriteHint),
   );
@@ -1774,7 +2014,7 @@ const STYLE = `
   --cz-font-sm:12px;--cz-font-md:14px;--cz-font-lg:16px;
   --cz-line-sm:18px;--cz-line-md:22px;--cz-line-lg:24px;
   --cz-radius-control:8px;--cz-radius-surface:10px;--cz-radius-group:12px;
-  --cz-row-h:40px;--cz-hit:28px;--cz-save-w:104px;
+  --cz-row-h:40px;--cz-hit:28px;--cz-save-w:104px;--cz-pulse:1200ms;
   --cz-gap-xs:4px;--cz-gap-sm:8px;--cz-gap-md:12px;--cz-gap-lg:20px;
   --cz-z-bubble:30;--cz-z-tip:40;
   --cz-font-code:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
@@ -1862,6 +2102,30 @@ const STYLE = `
 .dsh-context-zip__btn--flush{margin-left:-12px}
 .dsh-context-zip__btn[hidden]{display:none}
 .dsh-context-zip__more{padding-top:var(--cz-gap-sm)}
+
+/* 「压缩后端」行：左标题（含问号）、中主副行、右按钮，是「压缩方式」组的第一行。两条技能包
+   规则落在这一块：状态点只画真实的语义状态（本插件有没有接管压缩那一行），不做装饰，全面板
+   只此一颗（taste-skill 的 SKILL.md:683）；动画只为「有动作在进行」而存在（同文件 :360）。
+   形状与颜色分工，色盲用户也能读：空心=未生效与加载、实心=已生效、失败=实心加错误色、
+   接管中=空心加一圈呼吸环。点对读屏器无意义（状态在句子里），加 aria-hidden。
+   三样横排：标题不伸缩，主副行占满中间，按钮贴最右；行高取 --cz-row-h，主行 22px 加副行
+   18px 正好填满，所以有按钮与没按钮的态一样高。按钮与该组分段控件都是所在行的最后一个
+   伸缩项、行宽相同，右缘因此对齐，不额外定位。 */
+.dsh-context-zip__wire{display:flex;align-items:center;gap:16px;min-height:var(--cz-row-h)}
+.dsh-context-zip__wire-title{flex:none;display:flex;align-items:center;gap:var(--cz-gap-sm)}
+.dsh-context-zip__wire-body{flex:1;min-width:0;display:flex;flex-direction:column}
+.dsh-context-zip__wire-main{display:flex;align-items:center;gap:var(--cz-gap-sm);font-size:var(--cz-font-md);line-height:var(--cz-line-md);color:var(--dsw-alias-label-primary)}
+.dsh-context-zip__wire-main-text{min-width:0}
+.dsh-context-zip__wire-sub{padding-left:16px;font-size:var(--cz-font-sm);line-height:var(--cz-line-sm);color:var(--dsw-alias-label-secondary);text-wrap:pretty}
+.dsh-context-zip__wire-dot{position:relative;flex:none;width:8px;height:8px;border-radius:50%;border:1.5px solid var(--dsw-alias-label-tertiary);background:transparent;transition:background-color var(--cz-dur) var(--cz-ease),border-color var(--cz-dur) var(--cz-ease)}
+.dsh-context-zip__wire-dot[data-face="on"]{background:var(--dsw-alias-button-primary-fill);border-color:var(--dsw-alias-button-primary-fill)}
+.dsh-context-zip__wire-dot[data-face="busy"]{border-color:var(--dsw-alias-button-primary-fill)}
+.dsh-context-zip__wire-dot[data-face="error"]{background:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}
+.dsh-context-zip__wire-dot[data-face="busy"]::after{content:"";position:absolute;inset:-1.5px;border-radius:50%;border:1.5px solid var(--dsw-alias-button-primary-fill);transform:scale(1);opacity:.5;animation:cz-wire-pulse var(--cz-pulse) var(--cz-ease) infinite}
+@keyframes cz-wire-pulse{0%{transform:scale(1);opacity:.5}70%,100%{transform:scale(1.9);opacity:0}}
+.dsh-context-zip__wire-btn{flex:none}
+/* 接管在飞时那颗按钮禁用置灰：:hover 对禁用按钮照样命中，所以连同悬停背景一起按掉。 */
+.dsh-context-zip__wire-btn:disabled,.dsh-context-zip__wire-btn:disabled:hover{opacity:.55;cursor:default;background:none}
 
 /* 只读会话行（已生效会话与检索覆盖共用同一套；行间不画线） */
 .dsh-context-zip__list{display:flex;flex-direction:column}

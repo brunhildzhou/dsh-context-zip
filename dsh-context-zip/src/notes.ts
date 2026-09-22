@@ -24,7 +24,7 @@ import { dirname, join } from 'node:path';
 
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
 
-import { NOTES_MAX_CHARS } from 'dsh-context-zip-engine/prompt';
+import { NOTES_MAX_CHARS } from 'dsh-context-zip/engine/prompt';
 
 /** Root of the plugin's on-disk state. */
 export function contextZipRoot() {

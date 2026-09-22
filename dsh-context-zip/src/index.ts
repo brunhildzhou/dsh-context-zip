@@ -15,6 +15,9 @@
  * @module dsh-context-zip
  */
 
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import z from '@deepseek-ai/schemastery';
 
@@ -24,7 +27,7 @@ import {
   setSharedNotesReader,
   setSharedRewriteReader,
   runManualCompaction,
-} from 'dsh-context-zip-engine';
+} from 'dsh-context-zip/engine';
 import { PROBE_TIMEOUT_MS, probeModel, readModelCatalog } from './models.ts';
 import { ContextZipService, registerExportCommand } from './export.ts';
 import {
@@ -42,10 +45,11 @@ import {
   REMINDER_THRESHOLD_PERCENT,
   SUMMARY_HARD_CAP_TOKENS,
   SUMMARY_SOFT_TARGET_TOKENS,
-} from 'dsh-context-zip-engine/prompt';
+} from 'dsh-context-zip/engine/prompt';
 import { latestContextWindow, loadSegments, readSessionEvents } from './segments.ts';
 import { registerRoutes } from './routes.ts';
 import { createTitleMemo, sessionTitlesFor } from './session-titles.ts';
+import { readWireStatus, wireCompactionRow } from './wire.ts';
 
 // The panel's title read used to live in this module; it moved to
 // `./session-titles.ts` so the memo and the fold share one home. Re-exported
@@ -363,6 +367,15 @@ async function resolveEngineClass() {
  */
 export async function apply(ctx) {
   const noteStore = new NoteStore();
+  // This plugin's own directory, for the `redirect/` files the wire route copies
+  // out. It is read from `import.meta.url` deliberately and ONLY here, and the
+  // profile is never derived from it: Node resolves a symlinked module through
+  // `realpath`, so for a store-installed plugin this path points into the store
+  // and walking up would name the wrong directory. The profile comes from
+  // `ctx.baseUrl` instead, captured now because the route may run on a child
+  // scope whose context is not this one.
+  const pluginDir = dirname(dirname(fileURLToPath(import.meta.url)));
+  const profileBaseUrl = ctx.baseUrl;
   // Keyed by session id, never by the Session object: the session handed to a
   // listener is a scope proxy, so object identity does not survive from
   // `session/created` to a tool call and a WeakMap keyed by it never matches.
@@ -789,6 +802,11 @@ export async function apply(ctx) {
         return scope.get() ?? next;
       },
       listSegments: (sessionId) => service.listSegments(sessionId),
+      // The settings panel's "wire the compaction row" read and action. Both go
+      // through `./wire.ts`, which owns the profile derivation and the guards; the
+      // route only decides which verb is allowed and how a failure is reported.
+      readWireStatus: () => readWireStatus({ baseUrl: profileBaseUrl, pluginDir }),
+      wireRow: () => wireCompactionRow({ baseUrl: profileBaseUrl, pluginDir }),
       // 面板的模型下拉框读这个。从活的注册表现读，所以 adapter 增删路由之后刷新
       // 面板就能看到，不需要重启，也不需要在插件里维护第二份清单。
       listModels: () => readModelCatalog(ctx.llm),

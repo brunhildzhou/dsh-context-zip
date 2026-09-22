@@ -9,7 +9,7 @@
  * @module dsh-context-zip/transcript
  */
 
-import { EVENT_TEXT_CHARS, HISTORY_READ_MAX_CHARS, SEQ_LIST_HEAD, SEQ_LIST_TAIL } from 'dsh-context-zip-engine/prompt';
+import { EVENT_TEXT_CHARS, HISTORY_READ_MAX_CHARS, SEQ_LIST_HEAD, SEQ_LIST_TAIL } from 'dsh-context-zip/engine/prompt';
 
 /**
  * Project one stored session event into transcript text.

@@ -16,7 +16,7 @@
  * @module dsh-context-zip/segments
  */
 
-import { SEQ_LIST_HEAD, SEQ_LIST_TAIL } from 'dsh-context-zip-engine/prompt';
+import { SEQ_LIST_HEAD, SEQ_LIST_TAIL } from 'dsh-context-zip/engine/prompt';
 
 /**
  * Read this session's complete event log.

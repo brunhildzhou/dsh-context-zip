@@ -18,7 +18,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -200,6 +200,17 @@ const {
   sameSettings,
   saveButtonEnabled,
   saveButtonFace,
+  REDIRECT_PACKAGE,
+  REDIRECT_MARKER,
+  STAMP_FILE,
+  basePackageDir,
+  readWireStatus,
+  resolveProfileDirectory,
+  wireCompactionRow,
+  wireStatusFrom,
+  wireText,
+  wireFace,
+  stampText,
 } = await loadSubject();
 
 /** `existsSync` without pulling the whole namespace into the check file. */
@@ -462,6 +473,56 @@ try {
     ok('the English strings are present', en.length > 0);
     const keys = (text) => [...text.matchAll(/^  ([A-Za-z][A-Za-z0-9]*):/gmu)].map((match) => match[1]).sort();
     is('both locales define the same keys', keys(en).join(','), keys(zh).join(','));
+    // 「压缩后端」那一行的键：中英各一套、名字相同，且旧四相那批键已经删掉，不留死键。
+    // 结构性比较在上面那条已经管住了「两边一样多」；这里管的是这一行真的两套都在、
+    // 旧的真的没了——只删中文或只删英文都会从这里露出来。
+    const wireKeys = [
+      'rowTitle',
+      'help',
+      'inactiveMain',
+      'inactiveSub',
+      'takeover',
+      'takingMain',
+      'takingSub',
+      'activeMain',
+      'activeSubPrefix',
+      'versionUnknown',
+      'updateMain',
+      'updateTpl',
+      'reconnect',
+      'restartMain',
+      'restartSub',
+      'takenSub',
+      'incompleteMain',
+      'incompleteSub',
+      'unknownMain',
+      'unknownSub',
+      'failMain',
+      'retry',
+    ];
+    const zhKeys = keys(zh);
+    const enKeys = keys(en);
+    ok(
+      'the compaction-backend row defines every key in both locales',
+      wireKeys.every((key) => zhKeys.includes(key) && enKeys.includes(key)),
+    );
+    ok(
+      'the old four-phase wiring keys are gone, not left dead',
+      [
+        'wireOff',
+        'wireAction',
+        'wireBusy',
+        'wireOnDetail',
+        'wireOnStale',
+        'wireDone',
+        'wireForeign',
+        'wirePartial',
+        'wireUnknown',
+        'wireReadFailed',
+        'wireWriteFailed',
+      ].every((key) => zhKeys.includes(key) === false && enKeys.includes(key) === false),
+    );
+    is('both locales name the row', /rowTitle: '压缩后端',/u.test(zh) && /rowTitle: 'Compaction',/u.test(en), true);
     // The defect was a promise that the mode is frozen at session creation, which
     // the implementation contradicts: mode is resolved live before each compaction.
     const frozen = /frozen|read when a session is created|read once when|会话创建时读|之后不再变|存续期间不随/u;
@@ -2035,6 +2096,315 @@ try {
   }
 
   // -------------------------------------------------------------------------
+  // `/dsh-context-zip/wire`：接线状态与接线动作
+  //
+  // 一条路由两个动词。GET 答「接了没有」，POST 真去写文件。写的是 profile 里的
+  // `node_modules/@deepseek-ai/dsh-compaction-basic/`，所以它按写路由的口径设门：非回环
+  // 一律 403、POST 必须带 JSON 内容类型（跨站表单发不出这个头）。动作失败不是 200 带
+  // 一句 ok：状态码与 `error` 都要带上，面板照着显示。
+  // -------------------------------------------------------------------------
+  {
+    const captured = [];
+    let statusAnswer = { wired: false, version: null, copiedAt: null, stale: false, foreign: false };
+    let statusThrows = null;
+    let actionAnswer = { wired: true, version: '9.9.9-shipped', copiedAt: '2026-09-21T10:00:00.000Z', source: '/tmp/shipped' };
+    let actionThrows = null;
+    const dispose = registerRoutes(
+      { get: (name) => (name === 'webServer' ? { register: (spec) => { captured.push(spec); return () => {}; } } : undefined) },
+      {
+        readWireStatus: async () => {
+          if (statusThrows !== null) throw statusThrows;
+          return statusAnswer;
+        },
+        wireRow: async () => {
+          if (actionThrows !== null) throw actionThrows;
+          return actionAnswer;
+        },
+      },
+    );
+    const route = captured.find((spec) => spec.path === '/dsh-context-zip/wire');
+    is('wire route: registered', route !== undefined, true);
+    is('wire route: exact match', route?.kind, 'exact');
+    const call = async ({ method = 'GET', remote = '127.0.0.1', contentType = null, body = null } = {}) => {
+      let status = 0;
+      let text = '';
+      const req = {
+        method,
+        url: '/dsh-context-zip/wire',
+        headers: contentType === null ? {} : { 'content-type': contentType },
+        socket: { remoteAddress: remote },
+        on: () => {},
+        destroy: () => {},
+      };
+      await route.handler(req, { writeHead: (code) => { status = code; }, end: (payload) => { text = payload; } });
+      return { status, body: text.length === 0 ? {} : JSON.parse(text) };
+    };
+
+    const unwired = await call();
+    is('wire route: GET 200', unwired.status, 200);
+    is('wire route: 未接线时 GET 报未接线', unwired.body.wired, false);
+    is('wire route: 未接线时不编造版本', unwired.body.version, null);
+    is('wire route: GET 带 ok', unwired.body.ok, true);
+    // 进程启动时间是路由现算的字段：未接线也要有，因为「等待重启」比的是它与戳，而不是
+    // 接线状态；`readWireStatus` 的替身没有这个字段，所以这条同时钉住落点在路由这一层。
+    is('wire route: 未接线时也带进程启动时间', typeof unwired.body.processStartedAt, 'string');
+    ok('wire route: 进程启动时间可解析', Number.isFinite(Date.parse(unwired.body.processStartedAt)));
+    ok('wire route: 进程启动时间不晚于此刻', Date.parse(unwired.body.processStartedAt) <= Date.now());
+
+    statusAnswer = { wired: true, version: '0.1.5-rc.2', copiedAt: '2026-09-21T10:00:00.000Z', stale: true, foreign: false };
+    const wired = await call();
+    is('wire route: 已接线时 GET 报版本', wired.body.version, '0.1.5-rc.2');
+    is('wire route: 已接线时 GET 报时间', wired.body.copiedAt, '2026-09-21T10:00:00.000Z');
+    is('wire route: 已接线时 GET 带落后标记', wired.body.stale, true);
+    is('wire route: 已接线时 GET 也带进程启动时间', typeof wired.body.processStartedAt, 'string');
+
+    statusThrows = new Error('no profile');
+    const unreadable = await call();
+    is('wire route: 状态读不到时答 500，不假装未接线', unreadable.status, 500);
+    is('wire route: 状态读不到时带上原因', unreadable.body.error, 'no profile');
+    statusThrows = null;
+
+    const wiredUp = await call({ method: 'POST', contentType: 'application/json', body: '{}' });
+    is('wire route: POST 200', wiredUp.status, 200);
+    // POST 的答复也要带进程启动时间：面板点完「接管」就是拿这一份载荷判定的，缺了它
+    // 会把「等待重启」误判成「已生效」——刚写下的戳必然比本进程启动时间新。
+    is('wire route: POST 也带进程启动时间', typeof wiredUp.body.processStartedAt, 'string');
+    ok('wire route: POST 的进程启动时间可解析', Number.isFinite(Date.parse(wiredUp.body.processStartedAt)));
+    ok('wire route: POST 的进程启动时间不晚于此刻', Date.parse(wiredUp.body.processStartedAt) <= Date.now());
+    is('wire route: POST 回报已接线', wiredUp.body.wired, true);
+    is('wire route: POST 回报包装的版本', wiredUp.body.version, '9.9.9-shipped');
+
+    actionThrows = new Error('holds a real @deepseek-ai/dsh-compaction-basic');
+    const refused = await call({ method: 'POST', contentType: 'application/json', body: '{}' });
+    is('wire route: 动作被拒时答 500', refused.status, 500);
+    is('wire route: 动作被拒时把原因原样带给面板', refused.body.error, 'holds a real @deepseek-ai/dsh-compaction-basic');
+    is('wire route: 动作被拒时不报 ok', refused.body.ok, false);
+    actionThrows = null;
+
+    is('wire route: POST 不带 JSON 内容类型拒绝', (await call({ method: 'POST', contentType: 'text/plain' })).status, 415);
+    is('wire route: PUT 拒绝', (await call({ method: 'PUT', contentType: 'application/json' })).status, 405);
+    is('wire route: 非回环 GET 拒绝', (await call({ remote: '10.0.0.7' })).status, 403);
+    is(
+      'wire route: 非回环 POST 拒绝',
+      (await call({ method: 'POST', remote: '10.0.0.7', contentType: 'application/json', body: '{}' })).status,
+      403,
+    );
+    is('wire route: 一个注册一个 disposer', dispose.length, captured.length);
+  }
+
+  // -------------------------------------------------------------------------
+  // 接线动作：真文件系统
+  //
+  // 这一段一个真机 profile 都不碰：全部在 /tmp 的临时目录里造一个 profile
+  // （`home/profiles/web` 加上 `home/profiles/node_modules` 里的真实后端）和一个插件目录
+  // （含 `redirect/`）。钉的是那颗按钮的全部承诺：未接线时读得出未接线、接线写出三个文件
+  // 与戳、目标被真包占着时拒绝且一个字节都不动、第二次接线与第一次结果相同。守卫另有三条：
+  // 软链把目标带出 profile 时拒绝、`node_modules` 整条指外时拒绝、插件自己的 `redirect/`
+  // 文件缺失时拒绝且不把已接好的东西清掉（拒绝必须发生在清目录之前）。
+  // -------------------------------------------------------------------------
+  {
+    const probe = await mkdtemp(join(tmpdir(), 'zc-wire-'));
+    const priorHome = process.env.DSH_HOME;
+    const setHome = (value) => {
+      if (value === undefined) delete process.env.DSH_HOME;
+      else process.env.DSH_HOME = value;
+    };
+    try {
+      const home = join(probe, 'home');
+      const profileDir = join(home, 'profiles', 'web');
+      const modulesRoot = join(profileDir, 'node_modules');
+      const shippedDir = join(home, 'profiles', 'node_modules', REDIRECT_PACKAGE);
+      const pluginDir = join(probe, 'plugin');
+      const redirectDir = join(modulesRoot, REDIRECT_PACKAGE);
+      const at = (dir) => pathToFileURL(dir).href;
+
+      await mkdir(shippedDir, { recursive: true });
+      await mkdir(join(profileDir, 'node_modules'), { recursive: true });
+      await mkdir(join(pluginDir, 'redirect'), { recursive: true });
+      await writeFile(join(profileDir, 'package.json'), JSON.stringify({ name: 'web', dsh: { profile: { bundles: [] } } }));
+      await writeFile(
+        join(shippedDir, 'package.json'),
+        JSON.stringify({ name: REDIRECT_PACKAGE, version: '9.9.9-shipped', exports: { '.': { default: './index.js' } } }),
+      );
+      await writeFile(join(shippedDir, 'index.js'), 'export const BasicCompactionEngine = 1;\n');
+      await writeFile(
+        join(pluginDir, 'redirect', 'package.json'),
+        JSON.stringify({ name: REDIRECT_PACKAGE, version: `0.1.0-${REDIRECT_MARKER}`, private: true, type: 'module', main: 'index.js' }),
+      );
+      await writeFile(
+        join(pluginDir, 'redirect', 'index.js'),
+        "import { BasicCompactionEngine } from './base.js';\nexport default BasicCompactionEngine;\n",
+      );
+
+      const options = { baseUrl: at(profileDir), pluginDir };
+
+      const before = await readWireStatus(options);
+      is('wire action: 未接线时状态报未接线', before.wired, false);
+      is('wire action: 未接线时没有版本', before.version, null);
+      is('wire action: 未接线时没有时间', before.copiedAt, null);
+      is('wire action: 未接线时不报被占', before.foreign, false);
+      is('wire action: 未接线时目标目录不存在', existsSyncSafe(redirectDir), false);
+
+      const done = await wireCompactionRow(options);
+      is('wire action: 接线回报已接线', done.wired, true);
+      is('wire action: 接线回报包装的版本', done.version, '9.9.9-shipped');
+      is('wire action: 写出 index.js', existsSyncSafe(join(redirectDir, 'index.js')), true);
+      is('wire action: 写出 package.json', existsSyncSafe(join(redirectDir, 'package.json')), true);
+      is('wire action: 写出 base.js', existsSyncSafe(join(redirectDir, 'base.js')), true);
+      is('wire action: 写出戳', existsSyncSafe(join(redirectDir, STAMP_FILE)), true);
+      is(
+        'wire action: 没有多写出别的文件',
+        (await readdir(redirectDir)).sort().join(','),
+        ['base.js', STAMP_FILE, 'index.js', 'package.json'].sort().join(','),
+      );
+      is(
+        'wire action: index.js 来自插件自己的 redirect/',
+        await readFile(join(redirectDir, 'index.js'), 'utf8'),
+        await readFile(join(pluginDir, 'redirect', 'index.js'), 'utf8'),
+      );
+      is(
+        'wire action: package.json 来自插件自己的 redirect/',
+        await readFile(join(redirectDir, 'package.json'), 'utf8'),
+        await readFile(join(pluginDir, 'redirect', 'package.json'), 'utf8'),
+      );
+      is('wire action: base.js 是真实后端的入口内容', await readFile(join(redirectDir, 'base.js'), 'utf8'), 'export const BasicCompactionEngine = 1;\n');
+      const stamp = JSON.parse(await readFile(join(redirectDir, STAMP_FILE), 'utf8'));
+      is('wire action: 戳的键与 install.mjs 一致', Object.keys(stamp).sort().join(','), ['copiedAt', 'package', 'source', 'version'].sort().join(','));
+      is('wire action: 戳点名被包装的包', stamp.package, REDIRECT_PACKAGE);
+      is('wire action: 戳记下后端版本', stamp.version, '9.9.9-shipped');
+      is('wire action: 戳记下后端目录', stamp.source, shippedDir);
+      ok('wire action: 戳带一个可解析的时间', Number.isFinite(Date.parse(stamp.copiedAt)));
+
+      const after = await readWireStatus(options);
+      is('wire action: 接线后状态报已接线', after.wired, true);
+      is('wire action: 接线后状态报版本', after.version, '9.9.9-shipped');
+      is('wire action: 接线后状态报时间', after.copiedAt, stamp.copiedAt);
+      is('wire action: 接线后状态同时报内置当前的版本', after.current, '9.9.9-shipped');
+      is('wire action: 后端没换时不报落后', after.stale, false);
+
+      // ── 幂等：第二次接线的结果与第一次逐字节相同（戳的时间除外） ────────────
+      const firstSet = (await readdir(redirectDir)).sort().join(',');
+      const firstIndex = await readFile(join(redirectDir, 'index.js'), 'utf8');
+      const firstBase = await readFile(join(redirectDir, 'base.js'), 'utf8');
+      const again = await wireCompactionRow(options);
+      is('wire action: 第二次接线仍报同一版本', again.version, '9.9.9-shipped');
+      is('wire action: 第二次接线文件集合不变', (await readdir(redirectDir)).sort().join(','), firstSet);
+      is('wire action: 第二次接线 index.js 内容不变', await readFile(join(redirectDir, 'index.js'), 'utf8'), firstIndex);
+      is('wire action: 第二次接线 base.js 内容不变', await readFile(join(redirectDir, 'base.js'), 'utf8'), firstBase);
+      is('wire action: 第二次接线后仍是已接线', (await readWireStatus(options)).wired, true);
+
+      // ── 内置后端换版：戳还是旧的，「待更新」那一态要把两个版本都拿到 ─────────
+      await writeFile(
+        join(shippedDir, 'package.json'),
+        JSON.stringify({ name: REDIRECT_PACKAGE, version: '9.9.10-shipped', exports: { '.': { default: './index.js' } } }),
+      );
+      const upgraded = await readWireStatus(options);
+      is('wire action: 后端换版时状态报落后', upgraded.stale, true);
+      is('wire action: 后端换版时快照版本仍是戳里那个', upgraded.version, '9.9.9-shipped');
+      is('wire action: 后端换版时另报内置当前版本', upgraded.current, '9.9.10-shipped');
+      await writeFile(
+        join(shippedDir, 'package.json'),
+        JSON.stringify({ name: REDIRECT_PACKAGE, version: '9.9.9-shipped', exports: { '.': { default: './index.js' } } }),
+      );
+
+      // ── 目标被真包占着：拒绝，且原封不动 ────────────────────────────────────
+      await rm(redirectDir, { recursive: true, force: true });
+      await mkdir(redirectDir, { recursive: true });
+      await writeFile(join(redirectDir, 'package.json'), JSON.stringify({ name: REDIRECT_PACKAGE, version: '9.9.9-real' }));
+      await writeFile(join(redirectDir, 'index.js'), 'export default "somebody else";\n');
+      const occupied = await readWireStatus(options);
+      is('wire action: 被真包占着时状态报未接线', occupied.wired, false);
+      is('wire action: 被真包占着时状态点名被占', occupied.foreign, true);
+      let occupiedError = '';
+      try {
+        await wireCompactionRow(options);
+      } catch (error) {
+        occupiedError = String(error?.message ?? error);
+      }
+      ok('wire action: 目标被真包占着时拒绝', occupiedError.includes('refusing to overwrite'));
+      ok('wire action: 拒绝的话点名那个真包', occupiedError.includes(REDIRECT_PACKAGE));
+      is('wire action: 拒绝之后真包自己那个文件原封不动', await readFile(join(redirectDir, 'index.js'), 'utf8'), 'export default "somebody else";\n');
+      is('wire action: 拒绝之后没有留下 base.js', existsSyncSafe(join(redirectDir, 'base.js')), false);
+      is('wire action: 拒绝之后没有留下戳', existsSyncSafe(join(redirectDir, STAMP_FILE)), false);
+
+      // ── 插件自己的 redirect/ 缺失：拒绝，且发生在清目录之前 ─────────────────
+      await rm(redirectDir, { recursive: true, force: true });
+      is('wire action: 清掉被占的目录后能重新接上', (await wireCompactionRow(options)).wired, true);
+      const bare = join(probe, 'bare-plugin');
+      await mkdir(bare, { recursive: true });
+      let bareError = '';
+      try {
+        await wireCompactionRow({ baseUrl: at(profileDir), pluginDir: bare });
+      } catch (error) {
+        bareError = String(error?.message ?? error);
+      }
+      ok('wire action: 插件自己的 redirect/ 缺失时拒绝', bareError.includes('redirect files are missing'));
+      is('wire action: 那次拒绝没有把已接好的 base.js 清掉', existsSyncSafe(join(redirectDir, 'base.js')), true);
+
+      // ── 软链把目标带出 profile：拒绝，外面一个字节都不写 ────────────────────
+      const outside = join(probe, 'outside', '@deepseek-ai');
+      const escapeHome = join(probe, 'escape-home');
+      const escapeProfile = join(escapeHome, 'profiles', 'web');
+      await mkdir(outside, { recursive: true });
+      await mkdir(join(escapeProfile, 'node_modules'), { recursive: true });
+      await writeFile(join(escapeProfile, 'package.json'), JSON.stringify({ name: 'web', dsh: { profile: { bundles: [] } } }));
+      await symlink(outside, join(escapeProfile, 'node_modules', '@deepseek-ai'));
+      let escapeError = '';
+      try {
+        await wireCompactionRow({ baseUrl: at(escapeProfile), pluginDir });
+      } catch (error) {
+        escapeError = String(error?.message ?? error);
+      }
+      ok('wire action: 目标被软链带出 profile 时拒绝', escapeError.includes('outside the profile'));
+      is('wire action: 被拒之后 profile 外没有被写进重定向', existsSyncSafe(join(outside, REDIRECT_PACKAGE)), false);
+
+      // ── node_modules 整条指外：同样拒绝（容器那一道判据） ────────────────────
+      const escapeTwo = join(probe, 'escape-home-two');
+      const escapeTwoProfile = join(escapeTwo, 'profiles', 'web');
+      const vendorOutside = join(probe, 'vendor-outside');
+      await mkdir(escapeTwoProfile, { recursive: true });
+      await mkdir(vendorOutside, { recursive: true });
+      await writeFile(join(escapeTwoProfile, 'package.json'), JSON.stringify({ name: 'web', dsh: { profile: { bundles: [] } } }));
+      await symlink(vendorOutside, join(escapeTwoProfile, 'node_modules'));
+      let containerError = '';
+      try {
+        await wireCompactionRow({ baseUrl: at(escapeTwoProfile), pluginDir });
+      } catch (error) {
+        containerError = String(error?.message ?? error);
+      }
+      ok('wire action: node_modules 整条指外时拒绝', containerError.includes('outside the profile'));
+      is('wire action: 容器被拒之后外面同样没有写入', existsSyncSafe(join(vendorOutside, '@deepseek-ai')), false);
+
+      // ── profile 从哪儿来：上下文基址优先，绝不用插件自己的 realpath ──────────
+      //
+      // pnpm 软链陷阱的形状就是「基址等于插件自己所在目录」。那时写下去会把重定向塞进
+      // 包管理器的存储，所以这里必须拒绝，而不是照着基址写。
+      setHome(join(probe, 'no-such-home'));
+      let trapError = '';
+      try {
+        await wireCompactionRow({ baseUrl: at(pluginDir), pluginDir });
+      } catch (error) {
+        trapError = String(error?.message ?? error);
+      }
+      ok('wire action: 基址是插件自己所在目录时拒绝而不是照写', trapError.includes('not a profile'));
+      ok('wire action: 那句拒绝说清基址是插件自己的目录', trapError.includes('this plugin itself lives in'));
+
+      // home 那条后备：只有 `<profile>/node_modules/dsh-context-zip` 真的就是这个插件时才算。
+      const fbHome = join(probe, 'fallback-home');
+      const fbProfile = join(fbHome, 'profiles', 'web');
+      await mkdir(join(fbProfile, 'node_modules'), { recursive: true });
+      await writeFile(join(fbProfile, 'package.json'), JSON.stringify({ name: 'web', dsh: { profile: { bundles: [] } } }));
+      await symlink(pluginDir, join(fbProfile, 'node_modules', 'dsh-context-zip'));
+      setHome(fbHome);
+      is('wire action: 上下文没有基址时从 home 找出真正装了本插件的 profile', await resolveProfileDirectory(undefined, pluginDir), fbProfile);
+      is('wire action: 基址指错时退回 home 找到的那个 profile', await resolveProfileDirectory(at(pluginDir), pluginDir), fbProfile);
+    } finally {
+      setHome(priorHome);
+      await rm(probe, { recursive: true, force: true });
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // 面板上的会话行印的是会话标题，而不是一串 session id。名字走
   // `sessionQuery.readTitleSnapshots`：面板列的是整张覆盖表，大多数行的会话此刻并没
   // 打开，而 `sessionTitle` 只认活会话（对不上的直接抛），走它等于大部分行印不出名
@@ -3226,6 +3596,711 @@ try {
     'save draft: both locales name the save action',
     /saveAction: '保存',/u.test(clientSource) && /saveAction: 'Save',/u.test(clientSource),
   );
+}
+
+// ---------------------------------------------------------------------------
+// 「压缩后端」这一行：九态判定、两行文案、状态点的脸
+//
+// 「接管」是把 profile 里的 `@deepseek-ai/dsh-compaction-basic` 换成 `redirect/` 那一
+// 份，让压缩那一行解析到本插件。`dsh plugin add` 装出来的 profile 只有本体、没有这一
+// 份，插件能启动但压缩不生效，所以面板必须自己把这件事说出来。
+//
+// 三个纯函数分工：`wireStatusFrom` 把读数与动作位判成九态之一（先命中先算）；`wireText`
+// 给每一态一对主副行加一颗按钮的字；`wireFace` 给每一态一张状态点的脸。句子说状态、点说
+// 有没有生效、按钮说还能不能做事，三者必须同步。
+// ---------------------------------------------------------------------------
+{
+  const zh = {
+    loading: 'LOAD',
+    inactiveMain: '未生效',
+    inactiveSub: '内置压缩正在工作',
+    takeover: '接管',
+    takingMain: '正在接管',
+    takingSub: '请稍候',
+    activeMain: '已生效',
+    activeSubPrefix: '基于内置',
+    versionUnknown: '版本未知',
+    updateMain: '待更新',
+    updateTpl: (current, snapshot) => `内置 ${current}，快照 ${snapshot}，重接一次即可`,
+    reconnect: '重新接管',
+    restartMain: '等待重启',
+    restartSub: '下次启动时生效',
+    takenSub: '该位置已有其他实现，保持不动',
+    incompleteMain: '接管不完整',
+    incompleteSub: '重试一次即可恢复',
+    unknownMain: '状态未知',
+    unknownSub: '刚才没有读到',
+    failMain: '接管失败',
+    retry: '重试',
+  };
+  const en = {
+    loading: 'LOAD',
+    inactiveMain: 'Inactive',
+    inactiveSub: 'Built-in compaction is active',
+    takeover: 'Take over',
+    takingMain: 'Taking over',
+    takingSub: 'One moment',
+    activeMain: 'Active',
+    activeSubPrefix: 'Based on built-in',
+    versionUnknown: 'version unknown',
+    updateMain: 'Update available',
+    updateTpl: (current, snapshot) => `Built-in ${current}, snapshot ${snapshot}, reconnect to follow`,
+    reconnect: 'Reconnect',
+    restartMain: 'Restart required',
+    restartSub: 'Takes effect on next launch',
+    takenSub: 'That slot is already taken, left untouched',
+    incompleteMain: 'Incomplete',
+    incompleteSub: 'One retry restores it',
+    unknownMain: 'Unknown',
+    unknownSub: 'Could not read the status',
+    failMain: 'Could not take over',
+    retry: 'Retry',
+  };
+  const iso = new Date(2026, 0, 2, 3, 4, 5).toISOString();
+  const when = '01-02 03:04';
+  // 「等待重启」的两个参照时刻：`startedAfterStamp` 是这次进程启动晚于戳（重定向在进程
+  // 开始之前就写好了，本进程加载得到），`startedBeforeStamp` 是戳落在进程开始之后（只有
+  // 重启能加载）。判定不看 `/live` 的 `effective`，只看这一对时间戳。
+  const startedAfterStamp = new Date(2026, 0, 3, 0, 0, 0).toISOString();
+  const startedBeforeStamp = new Date(2026, 0, 1, 0, 0, 0).toISOString();
+  const wired = { ok: true, wired: true, version: '0.1.5-rc.2', current: '0.1.5-rc.2', copiedAt: iso, processStartedAt: startedAfterStamp, stale: false, foreign: false };
+  const restartPending = { ...wired, processStartedAt: startedBeforeStamp };
+  const stale = { ...wired, current: '0.1.5-rc.3', stale: true };
+  const unwired = { ok: true, wired: false, version: null, copiedAt: null, stale: false, foreign: false };
+
+  is('stamp text: renders the local date and time', stampText(iso), when);
+  is('stamp text: an empty stamp renders as nothing', stampText(''), '');
+  is('stamp text: a non-string stamp renders as nothing', stampText(42), '');
+  is('stamp text: an unparseable stamp renders as nothing', stampText('nonsense'), '');
+
+  // ── 九态：一态一条；顺序本身就是判定的一部分 ─────────────────────────────
+  is('wire status: a failed read is unknown', wireStatusFrom({ ok: false, error: 'no profile here' }, null), 'unknown');
+  is('wire status: a foreign occupant is taken', wireStatusFrom({ ok: true, wired: false, foreign: true }, null), 'taken');
+  is('wire status: a partial redirect is incomplete', wireStatusFrom({ ok: true, wired: false, partial: true }, null), 'incomplete');
+  is('wire status: an unwired row is inactive', wireStatusFrom(unwired, null), 'inactive');
+  is('wire status: a write in flight is taking', wireStatusFrom(wired, 'taking'), 'taking');
+  is('wire status: a refused write is failed', wireStatusFrom(wired, 'failed'), 'failed');
+  is('wire status: a stale redirect is update', wireStatusFrom(stale, null), 'update');
+  is('wire status: a stamp newer than the process waits for a restart', wireStatusFrom(restartPending, null), 'restart');
+  is('wire status: a stamp older than the process is active', wireStatusFrom(wired, null), 'active');
+
+  // 先命中先算：读数失败压过一切；被占压过残缺；落后压过待重启；未生效压过接管中。
+  is('wire status: a failed read outranks a foreign flag', wireStatusFrom({ ok: false, foreign: true }, null), 'unknown');
+  is('wire status: a foreign occupant outranks an incomplete redirect', wireStatusFrom({ ok: true, wired: false, foreign: true, partial: true }, null), 'taken');
+  is('wire status: a stale redirect outranks the restart branch', wireStatusFrom({ ...restartPending, current: '0.1.5-rc.3', stale: true }, null), 'update');
+  is('wire status: an unwired row outranks the write in flight', wireStatusFrom(unwired, 'taking'), 'inactive');
+
+  // 「等待重启」要有正向证据：`copiedAt` 或 `processStartedAt` 缺失、解析不出来、或两者
+  // 相等，都不判重启，落回已生效；那比猜「等重启」更不容易骗人。
+  is('wire status: a missing copied stamp is not a restart', wireStatusFrom({ ...restartPending, copiedAt: null }, null), 'active');
+  is('wire status: a missing process start is not a restart', wireStatusFrom({ ...restartPending, processStartedAt: null }, null), 'active');
+  is('wire status: an unparseable copied stamp is not a restart', wireStatusFrom({ ...restartPending, copiedAt: 'nonsense' }, null), 'active');
+  is('wire status: an unparseable process start is not a restart', wireStatusFrom({ ...restartPending, processStartedAt: 'nonsense' }, null), 'active');
+  is('wire status: an equal stamp and process start are not a restart', wireStatusFrom({ ...restartPending, processStartedAt: iso }, null), 'active');
+
+  // ── 文案：九态各一对主副行；按钮只在还能做事时出现 ───────────────────────
+  is('wire text: inactive offers the takeover', wireText('inactive', unwired, zh), { main: '未生效', sub: '内置压缩正在工作', action: '接管' });
+  is('wire text: taking over disables itself', wireText('taking', wired, zh), { main: '正在接管', sub: '请稍候', action: '接管' });
+  is('wire text: active names the wrapped version and time, no button', wireText('active', wired, zh), { main: '已生效', sub: '基于内置 0.1.5-rc.2，01-02 03:04', action: '' });
+  is('wire text: update names both versions and offers a reconnect', wireText('update', stale, zh), { main: '待更新', sub: '内置 0.1.5-rc.3，快照 0.1.5-rc.2，重接一次即可', action: '重新接管' });
+  is('wire text: restart waits and offers nothing', wireText('restart', wired, zh), { main: '等待重启', sub: '下次启动时生效', action: '' });
+  is('wire text: taken leaves the other implementation alone', wireText('taken', { ok: true, wired: false, foreign: true }, zh), { main: '未生效', sub: '该位置已有其他实现，保持不动', action: '' });
+  is('wire text: incomplete offers one retry', wireText('incomplete', { ok: true, wired: false, partial: true }, zh), { main: '接管不完整', sub: '重试一次即可恢复', action: '重试' });
+  is('wire text: unknown offers one retry', wireText('unknown', { ok: false, error: 'no profile here' }, zh), { main: '状态未知', sub: '刚才没有读到', action: '重试' });
+  is('wire text: failed prints the server reason bare', wireText('failed', { ok: true, wired: true, error: 'refusing to overwrite' }, zh), { main: '接管失败', sub: 'refusing to overwrite', action: '重试' });
+  is('wire text: loading says it is reading and shows nothing else', wireText('loading', null, zh), { main: 'LOAD', sub: '', action: '' });
+
+  // 版本兜底：副行要印版本而戳里没有 `version` 时印兜底句，不留空位（旧的
+  // `基于内置 ，09-22 00:08` 就是空位露出来的样子）；active 与 update 两条印版本的
+  // 副行都要走到。
+  is('wire text: a missing stamp version prints the fallback sentence', wireText('active', { ...wired, version: null }, zh), { main: '已生效', sub: '基于内置 版本未知，01-02 03:04', action: '' });
+  is('wire text: an empty stamp version prints the fallback too', wireText('active', { ...wired, version: '' }, zh), { main: '已生效', sub: '基于内置 版本未知，01-02 03:04', action: '' });
+  is('wire text: the update line falls back for a missing snapshot version', wireText('update', { ...stale, version: null }, zh), { main: '待更新', sub: '内置 0.1.5-rc.3，快照 版本未知，重接一次即可', action: '重新接管' });
+
+  // 英文表：同一套状态；只有 active 副行里版本与时间之间的逗号换成半角。
+  is('wire text: the English inactive pair', wireText('inactive', unwired, en, 'en'), { main: 'Inactive', sub: 'Built-in compaction is active', action: 'Take over' });
+  is('wire text: the English active pair uses a half-width comma', wireText('active', wired, en, 'en'), { main: 'Active', sub: 'Based on built-in 0.1.5-rc.2, 01-02 03:04', action: '' });
+  is('wire text: the English update pair', wireText('update', stale, en, 'en'), { main: 'Update available', sub: 'Built-in 0.1.5-rc.3, snapshot 0.1.5-rc.2, reconnect to follow', action: 'Reconnect' });
+  is('wire text: the English fallback sentence', wireText('active', { ...wired, version: null }, en, 'en'), { main: 'Active', sub: 'Based on built-in version unknown, 01-02 03:04', action: '' });
+  is('wire text: the English failed pair leaves the reason bare', wireText('failed', { error: 'refusing to overwrite' }, en, 'en'), { main: 'Could not take over', sub: 'refusing to overwrite', action: 'Retry' });
+
+  // ── 状态点的脸：空心=未生效与加载，实心主色=已生效，实心错误色=失败 ───────
+  is('wire face: loading draws the open ring', wireFace('loading'), 'off');
+  is('wire face: inactive draws the open ring', wireFace('inactive'), 'off');
+  is('wire face: incomplete draws the open ring', wireFace('incomplete'), 'off');
+  is('wire face: unknown draws the open ring', wireFace('unknown'), 'off');
+  is('wire face: update draws the open ring', wireFace('update'), 'off');
+  is('wire face: restart draws the open ring', wireFace('restart'), 'off');
+  is('wire face: taken draws the open ring', wireFace('taken'), 'off');
+  is('wire face: a stray status draws the open ring', wireFace('nonsense'), 'off');
+  is('wire face: taking over draws the breathing ring', wireFace('taking'), 'busy');
+  is('wire face: active draws the filled primary ring', wireFace('active'), 'on');
+  is('wire face: failed draws the filled error ring', wireFace('failed'), 'error');
+}
+
+// ---------------------------------------------------------------------------
+// 「压缩后端」这一行怎么渲染：真 bundle、真渲染
+//
+// 上一段证明的是九态判定与文案本身；这一段证明面板真的把那一行画出来——左标题（含问号
+// 气泡）、中主副行、右按钮三样各就各位，九态里按钮该在的在哪、该缺席的缺席，接管在飞时
+// 按钮禁用且行自报忙碌。走的仍是既有那套替身：加载 `lib/client.js`，用替身 react 展开
+// 函数组件。
+//
+// 与模式芯片那一段的差别：设置面板挂载时会读设置，所以这里的替身是一个**带重渲染的小
+// React**——`useState` 的格子跨渲染保留，`useEffect` 认依赖数组，读到答案后再渲染一轮。
+// 只跑固定轮数，不等待任何真实计时器（`setInterval` 被换成空实现）。
+// ---------------------------------------------------------------------------
+{
+  const effective = { compaction: 'plugin', source: 'global', revision: null };
+  const settingsBody = {
+    ok: true,
+    value: { enabled: true, agents: {}, fallbackEnabled: false, fallbackAfterFailures: 5, rewriteEnabled: false, rewriteProvider: '', rewriteModel: '' },
+    effective,
+    titles: {},
+  };
+  const liveBody = { ok: true, effective, titles: {} };
+  // 初值是「GET 还没回来」：第一段判据要停在读取中那一态上。
+  const wireAnswer = { get: { pending: true }, post: null };
+  let wireGets = 0;
+  let wirePosts = 0;
+  /** 本地时刻的 ISO 串，戳进载荷；面板再按本地 `MM-DD HH:mm` 印出来。 */
+  const isoFor = (year, month, day, hours, minutes, seconds) => new Date(year, month, day, hours, minutes, seconds).toISOString();
+
+  const calls = [];
+  const makeElement = (type, props, ...children) => {
+    calls.push({ type, props: props ?? {} });
+    return { type, props: props ?? {}, children };
+  };
+  const cells = [];
+  let cursor = 0;
+  let pending = [];
+  const sameDeps = (a, b) =>
+    Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
+  const cellAt = (index, make) => {
+    if (cells[index] === undefined) cells[index] = make();
+    return cells[index];
+  };
+  const fakeReact = {
+    createElement: makeElement,
+    Fragment: 'Fragment',
+    useState(initial) {
+      const cell = cellAt(cursor++, () => ({ value: typeof initial === 'function' ? initial() : initial }));
+      return [cell.value, (next) => { cell.value = typeof next === 'function' ? next(cell.value) : next; cell.dirty = true; }];
+    },
+    useEffect(fn, deps) {
+      const cell = cellAt(cursor++, () => ({}));
+      pending.push({ cell, fn, deps });
+    },
+    useLayoutEffect(fn, deps) {
+      const cell = cellAt(cursor++, () => ({}));
+      pending.push({ cell, fn, deps });
+    },
+    useCallback(fn, deps) {
+      const cell = cellAt(cursor++, () => ({}));
+      if (cell.value === undefined || cell.deps === undefined || sameDeps(cell.deps, deps) === false) {
+        cell.value = fn;
+        cell.deps = deps;
+      }
+      return cell.value;
+    },
+    useMemo(fn, deps) {
+      const cell = cellAt(cursor++, () => ({}));
+      if (cell.value === undefined || cell.deps === undefined || sameDeps(cell.deps, deps) === false) {
+        cell.value = fn();
+        cell.deps = deps;
+      }
+      return cell.value;
+    },
+    useRef(initial) {
+      return cellAt(cursor++, () => ({ current: initial }));
+    },
+    useContext: () => 'zh',
+    createContext: (value) => ({ _value: value, Provider: 'LocaleProvider', Consumer: 'LocaleConsumer' }),
+    useSyncExternalStore: (_subscribe, snapshot) => snapshot(),
+  };
+
+  const priorWindow = globalThis.window;
+  const priorDocument = globalThis.document;
+  const priorFetch = globalThis.fetch;
+  const priorSetInterval = globalThis.setInterval;
+  const priorClearInterval = globalThis.clearInterval;
+  globalThis.setInterval = () => 0;
+  globalThis.clearInterval = () => {};
+  globalThis.window = { __ModuleLoader__: { load(spec) { factory = spec.factory; } }, innerWidth: 1200, innerHeight: 900 };
+  globalThis.document = {
+    createElement: () => ({ id: '', textContent: '', append() {} }),
+    head: { append() {} },
+    addEventListener() {},
+    removeEventListener() {},
+    visibilityState: 'visible',
+  };
+  globalThis.fetch = async (url, options = {}) => {
+    const method = String(options?.method ?? 'GET').toUpperCase();
+    const answer = (body) => ({ status: 200, json: async () => body });
+    if (url === '/dsh-context-zip/settings') return answer(settingsBody);
+    if (url === '/dsh-context-zip/live') return answer(liveBody);
+    if (url === '/dsh-context-zip/models') return answer({ ok: true, providers: [], failures: [] });
+    if (url === '/dsh-context-zip/wire') {
+      if (method === 'POST') {
+        wirePosts += 1;
+        const next = wireAnswer.post ?? {};
+        // `pending: true` 是「请求还没回来」：接管中的那一组判据要停在飞行态上，
+        // 所以这里给一个永不落地的 promise，而不是让响应在下一次 flush 就到。
+        if (next.pending === true) return new Promise(() => {});
+        if (next.throw === true) throw new Error('network down');
+        return { status: next.status ?? 200, json: async () => next.body };
+      }
+      wireGets += 1;
+      if (wireAnswer.get.pending === true) return new Promise(() => {});
+      return answer({ ok: true, ...wireAnswer.get });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  let factory = null;
+  try {
+    // 带一个查询串，绕开前面已经导入过的同一份模块缓存：`window.__ModuleLoader__.load`
+    // 只在模块顶层代码真的跑一次时才会被调用。
+    await import(`${pathToFileURL(join(here, '..', 'lib', 'client.js')).href}?wire-row`);
+    is('wire row: the client bundle registers itself with the loader', typeof factory, 'function');
+    const client = factory((name) => {
+      if (name === 'react' || name === 'react/jsx-runtime') return fakeReact;
+      throw new Error(`the client bundle required an unexpected external: ${name}`);
+    });
+    const registrations = [];
+    client.apply({
+      locale: { register() {}, getLocale: () => ({ active: 'zh' }) },
+      slots: {
+        inject(name, fn) {
+          fn();
+        },
+        register(spec, component) {
+          registrations.push({ spec, component });
+          return () => {};
+        },
+      },
+    });
+    const registered = registrations.find((one) => one.spec.id === 'context-zip');
+    is('wire row: the settings section is registered', registered !== undefined, true);
+
+    const expand = (element, depth = 0) => {
+      if (element === null || element === undefined || typeof element !== 'object') return element;
+      const isFunctionComponent = typeof element.type === 'function' && /^\s*class\b/u.test(String(element.type)) === false;
+      if (isFunctionComponent && depth < 40) return expand(element.type(element.props ?? {}), depth + 1);
+      return { type: element.type, props: element.props ?? {}, children: (element.children ?? []).map((child) => expand(child, depth + 1)) };
+    };
+    const findClass = (node, className) => {
+      if (node === null || node === undefined || typeof node !== 'object') return null;
+      if (node.props?.className === className) return node;
+      for (const child of node.children ?? []) {
+        const found = findClass(child, className);
+        if (found !== null) return found;
+      }
+      return null;
+    };
+    const textOf = (node) => {
+      if (typeof node === 'string') return node;
+      if (node === null || node === undefined || typeof node !== 'object') return '';
+      return (node.children ?? []).map(textOf).join('');
+    };
+    const paint = async () => {
+      let tree = null;
+      for (let round = 0; round < 8; round += 1) {
+        cursor = 0;
+        pending = [];
+        for (const cell of cells) if (cell !== undefined && cell.dirty === true) cell.dirty = false;
+        tree = expand(registered.component({}));
+        for (const effect of pending) {
+          if (effect.deps !== undefined && sameDeps(effect.deps, effect.cell.deps)) continue;
+          effect.cell.deps = effect.deps;
+          effect.fn();
+        }
+        await flush();
+        if (cells.some((cell) => cell !== undefined && cell.dirty === true) === false) break;
+      }
+      return tree;
+    };
+    const rowOf = (tree) => findClass(tree, 'dsh-context-zip__wire');
+    // 三样各按类名找，不靠下标：左标题、中主副行、右按钮。
+    const childOfClass = (node, className) =>
+      (node?.children ?? []).find((child) => child?.props?.className === className);
+    const titleOf = (row) => childOfClass(row, 'dsh-context-zip__wire-title');
+    const bodyOf = (row) => childOfClass(row, 'dsh-context-zip__wire-body');
+    const mainOf = (row) => childOfClass(bodyOf(row), 'dsh-context-zip__wire-main');
+    const subOf = (row) => childOfClass(bodyOf(row), 'dsh-context-zip__wire-sub');
+    const mainText = (row) => textOf(childOfClass(mainOf(row), 'dsh-context-zip__wire-main-text'));
+    const subText = (row) => textOf(subOf(row));
+    const dotOf = (row) => childOfClass(mainOf(row), 'dsh-context-zip__wire-dot');
+    // 行自己的按钮是行的直接孩子；标题里那颗问号是按钮，但不是直接孩子，所以不会混进来。
+    const buttonOf = (row) => (row?.children ?? []).find((child) => child?.type === 'button');
+    const helpButtonOf = (row) => (titleOf(row)?.children ?? []).find((child) => child?.type === 'button');
+    // 按钮不在或没挂 click 时记一条失败，而不是让这一行把整套判据打断：面板少画一颗按钮
+    // 是「有判据要红」，不是「测试跑不下去」。
+    const click = (target, label) => {
+      if (target === undefined || typeof target.props?.onClick !== 'function') {
+        ok(label, false);
+        return false;
+      }
+      // 事件替身：问号那颗按钮的 click 会先 stopPropagation，再切换气泡。
+      target.props.onClick({ stopPropagation() {} });
+      return true;
+    };
+    const remount = () => {
+      // 重挂载：面板关掉再打开就是这一件事，接管状态要重新从 GET 读一次。
+      cells.length = 0;
+    };
+
+    // 读取中：GET 还没回来，行已经在位、结构已经是三样，但主行只说读取中、没有按钮。
+    let tree = await paint();
+    let row = rowOf(tree);
+    is('wire row: the row renders before the read answers', row !== null, true);
+    is('wire row: a pending read is the loading status', row?.props?.['data-status'], 'loading');
+    is('wire row: a pending read says it is reading', mainText(row), '读取中…');
+    is('wire row: a pending read shows no sub line', subText(row), '');
+    is('wire row: a pending read offers no button', buttonOf(row), undefined);
+    is('wire row: a pending read draws the open ring', dotOf(row)?.props?.['data-face'], 'off');
+    is('wire row: a pending read is not announced as busy', row?.props?.['aria-busy'], 'false');
+
+    // 未生效：标题、问号气泡、主副行、按钮四样都在，而且这一行是「压缩方式」组的第一行。
+    wireAnswer.get = { ok: true, wired: false, version: null, copiedAt: null, stale: false, foreign: false };
+    remount();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: an unwired panel renders the row', row !== null, true);
+    is('wire row: unwired is the inactive status', row?.props?.['data-status'], 'inactive');
+    is('wire row: the row title is 压缩后端', textOf(titleOf(row)), '压缩后端');
+    is('wire row: the title carries the question-mark bubble', helpButtonOf(row) !== undefined, true);
+    is(
+      'wire row: the bubble says takeover needs a restart',
+      helpButtonOf(row)?.props?.['aria-label'],
+      '插件接管压缩后才生效，接管后需重启一次 harness。',
+    );
+    is('wire row: the bubble is described by the wire help text', helpButtonOf(row)?.props?.['aria-describedby'], 'dsh-context-zip-help-wire');
+    is('wire row: the main line is 未生效', mainText(row), '未生效');
+    is('wire row: the sub line says the built-in backend is working', subText(row), '内置压缩正在工作');
+    let button = buttonOf(row);
+    is('wire row: the button is labelled 接管', textOf(button), '接管');
+    is('wire row: the button is live', button?.props?.disabled, false);
+    is('wire row: the row announces itself politely', bodyOf(row)?.props?.['aria-live'], 'polite');
+    is('wire row: the dot is hidden from assistive technology', dotOf(row)?.props?.['aria-hidden'], 'true');
+    is('wire row: an unwired row draws the open ring', dotOf(row)?.props?.['data-face'], 'off');
+    is('wire row: an unwired row is not announced as busy', row?.props?.['aria-busy'], 'false');
+
+    // 结构落点：左标题 → 中主副行 → 右按钮；点带在主行行首，副行跟在主行后面。
+    is('wire row: the title leads the row', row?.children?.[0], titleOf(row));
+    is('wire row: the main and sub lines sit in the middle', row?.children?.[1], bodyOf(row));
+    is('wire row: the button closes the row on the right', row?.children?.[2], button);
+    is('wire row: the dot leads the main line', mainOf(row)?.children?.[0], dotOf(row));
+    is('wire row: the sub line follows the main line', bodyOf(row)?.children?.[1], subOf(row));
+
+    // 位置：接管行在「压缩方式」组内排第一，分段控件那一行在它后面。
+    const methodGroup = findClass(tree, 'dsh-context-zip__group');
+    const methodRows = findClass(methodGroup, 'dsh-context-zip__rows');
+    is('wire row: it is the first row inside the compaction-method group', methodRows?.children?.[0]?.props?.className, 'dsh-context-zip__wire');
+    is('wire row: the method segment row follows it', methodRows?.children?.[1]?.props?.className, 'dsh-context-zip__row');
+
+    // 接管在飞：乐观置真之后命中「接管中」，按钮禁用、行自报忙碌、点画呼吸环。
+    wireAnswer.post = { pending: true };
+    click(button, 'wire row: the takeover button has a click handler');
+    await flush();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: while the write is in flight the status is taking', row?.props?.['data-status'], 'taking');
+    is('wire row: while the write is in flight the dot breathes', dotOf(row)?.props?.['data-face'], 'busy');
+    is('wire row: while the write is in flight the row says so', row?.props?.['aria-busy'], 'true');
+    is('wire row: while the write is in flight the main line is 正在接管', mainText(row), '正在接管');
+    is('wire row: while the write is in flight the sub line asks to wait', subText(row), '请稍候');
+    is('wire row: while the write is in flight the button is disabled', buttonOf(row)?.props?.disabled, true);
+    is('wire row: while the write is in flight the button is still there', buttonOf(row) !== undefined, true);
+
+    // 接管落地：九态走到已生效，按钮消失，主副行都在（所以行高与有按钮时相同）。
+    wireAnswer.post = { body: { ok: true, wired: true, version: '9.9.9-shipped', copiedAt: isoFor(2026, 0, 2, 3, 4, 5) } };
+    click(buttonOf(row), 'wire row: the landing write has a click handler');
+    await flush();
+    await flush();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: after takeover the status is active', row?.props?.['data-status'], 'active');
+    is('wire row: after takeover the button is gone', buttonOf(row), undefined);
+    is('wire row: after takeover the dot is filled', dotOf(row)?.props?.['data-face'], 'on');
+    is('wire row: after takeover the main line is 已生效', mainText(row), '已生效');
+    is('wire row: after takeover the sub line names the wrapped version and time', subText(row), '基于内置 9.9.9-shipped，01-02 03:04');
+    is('wire row: a no-button row keeps the main line, so its height cannot differ', mainOf(row) !== null, true);
+    is('wire row: a no-button row keeps the sub line too', subText(row).length > 0, true);
+    is('wire row: after takeover the row is not announced as busy', row?.props?.['aria-busy'], 'false');
+
+    // 已接管且不落后：重新打开面板只有两行字，没有按钮，点的脸是实心。戳早于本进程的启动
+    // 时间，所以这一行是「已生效」而不是「等待重启」。
+    wireAnswer.get = { ok: true, wired: true, version: '0.1.5-rc.2', current: '0.1.5-rc.2', copiedAt: isoFor(2026, 0, 2, 3, 4, 5), processStartedAt: isoFor(2026, 0, 3, 0, 0, 0), stale: false };
+    remount();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: a wired panel renders no button', buttonOf(row), undefined);
+    is('wire row: a wired panel names the version and time', subText(row), '基于内置 0.1.5-rc.2，01-02 03:04');
+    is('wire row: a wired panel draws the filled dot', dotOf(row)?.props?.['data-face'], 'on');
+
+    // 这一行不再拿 `/live` 的 `effective` 当判据：把设置开关那侧说成内置后端，接管行依旧按
+    // 时间戳读成已生效。旧实现会在这里说「等待重启」，说假话。
+    effective.compaction = 'default';
+    remount();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: the live effective no longer decides the restart state', row?.props?.['data-status'], 'active');
+    effective.compaction = 'plugin';
+
+    // 待更新：快照落后于现在包装的内置后端，按钮换字为「重新接管」。
+    wireAnswer.get = { ok: true, wired: true, version: '0.1.5-rc.2', current: '0.1.5-rc.3', copiedAt: isoFor(2026, 0, 2, 3, 4, 5), processStartedAt: isoFor(2026, 0, 3, 0, 0, 0), stale: true };
+    remount();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: a stale redirect is the update status', row?.props?.['data-status'], 'update');
+    is('wire row: the update line names both versions', subText(row), '内置 0.1.5-rc.3，快照 0.1.5-rc.2，重接一次即可');
+    is('wire row: the update offers a reconnect', textOf(buttonOf(row)), '重新接管');
+    is('wire row: the update is not in effect yet', dotOf(row)?.props?.['data-face'], 'off');
+
+    // 待重启：接管已写进 profile，但戳落在这个进程启动之后——只有重启能加载到它。
+    wireAnswer.get = { ok: true, wired: true, version: '0.1.5-rc.2', current: '0.1.5-rc.2', copiedAt: isoFor(2026, 0, 2, 3, 4, 5), processStartedAt: isoFor(2026, 0, 1, 0, 0, 0), stale: false };
+    remount();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: a stamp newer than the process waits for a restart', row?.props?.['data-status'], 'restart');
+    is('wire row: the restart line says when it takes effect', subText(row), '下次启动时生效');
+    is('wire row: the restart offers no button', buttonOf(row), undefined);
+    is('wire row: the restart keeps the open ring', dotOf(row)?.props?.['data-face'], 'off');
+    is('wire row: the restart is not announced as busy', row?.props?.['aria-busy'], 'false');
+    is('wire row: the restart keeps the main line', mainText(row), '等待重启');
+
+    // 被占用：那一格是别人的真包，本插件不动它，也没有按钮。
+    wireAnswer.get = { ok: true, wired: false, foreign: true };
+    remount();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: a foreign occupant is the taken status', row?.props?.['data-status'], 'taken');
+    is('wire row: the taken line explains it is left untouched', subText(row), '该位置已有其他实现，保持不动');
+    is('wire row: the taken row offers no button', buttonOf(row), undefined);
+    is('wire row: the taken row keeps the main line', mainText(row), '未生效');
+
+    // 不完整：本插件自己的重定向在、戳不在；「重试」重写一次就恢复。
+    wireAnswer.get = { ok: true, wired: false, partial: true };
+    wireAnswer.post = { body: { ok: true, wired: true, version: '9.9.9-shipped', copiedAt: isoFor(2026, 0, 2, 3, 4, 5) } };
+    remount();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: a partial redirect is the incomplete status', row?.props?.['data-status'], 'incomplete');
+    is('wire row: the incomplete line promises one retry', subText(row), '重试一次即可恢复');
+    is('wire row: the incomplete row offers a retry', textOf(buttonOf(row)), '重试');
+    click(buttonOf(row), 'wire row: the incomplete retry has a click handler');
+    await flush();
+    await flush();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: the incomplete retry re-takes over', row?.props?.['data-status'], 'active');
+
+    // 未知：状态读不到；「重试」是重读，不是重写，而且不印服务端原因（副行只说没读到）。
+    wireAnswer.get = { ok: false, error: 'no profile here' };
+    remount();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: an unreadable status is the unknown status', row?.props?.['data-status'], 'unknown');
+    is('wire row: the unknown line says it could not read', subText(row), '刚才没有读到');
+    is('wire row: the unknown row does not print the server reason', subText(row).includes('no profile here'), false);
+    is('wire row: the unknown row offers a retry', textOf(buttonOf(row)), '重试');
+    const postsBeforeRead = wirePosts;
+    const getsBeforeRead = wireGets;
+    wireAnswer.get = { ok: true, wired: false, version: null, copiedAt: null, stale: false, foreign: false };
+    click(buttonOf(row), 'wire row: the unknown retry has a click handler');
+    await flush();
+    await flush();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: the unknown retry reads again instead of writing', wirePosts, postsBeforeRead);
+    is('wire row: the unknown retry sent one more status read', wireGets, getsBeforeRead + 1);
+    is('wire row: the unknown retry lands on the fresh reading', row?.props?.['data-status'], 'inactive');
+
+    // 失败：服务端拒绝，副行只印原因原文（不加任何前缀），按钮还在（重试是同一颗）。
+    wireAnswer.get = { ok: true, wired: false, version: null, copiedAt: null, stale: false, foreign: false };
+    wireAnswer.post = { status: 500, body: { ok: false, error: 'refusing to overwrite a package this plugin did not put there' } };
+    remount();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: a refused takeover keeps the button for a retry', buttonOf(row) !== undefined, true);
+    click(buttonOf(row), 'wire row: the retry button has a click handler');
+    await flush();
+    await flush();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: a refused takeover is the failed status', row?.props?.['data-status'], 'failed');
+    is('wire row: the failed main line says the takeover failed', mainText(row), '接管失败');
+    is(
+      'wire row: the failed sub line is the server reason, bare',
+      subText(row),
+      'refusing to overwrite a package this plugin did not put there',
+    );
+    is('wire row: the failed reason carries no prefix', subText(row).startsWith('接管失败'), false);
+    is('wire row: the failed row offers a retry', textOf(buttonOf(row)), '重试');
+    is('wire row: the failed row draws the error ring', dotOf(row)?.props?.['data-face'], 'error');
+    is('wire row: the failed row is not announced as busy', row?.props?.['aria-busy'], 'false');
+
+    // 网络层抛错走同一态：原因换成异常消息，仍然是失败而不是未知。
+    wireAnswer.post = { throw: true };
+    remount();
+    tree = await paint();
+    row = rowOf(tree);
+    click(buttonOf(row), 'wire row: the thrown write has a click handler');
+    await flush();
+    await flush();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: a thrown write is the failed status', row?.props?.['data-status'], 'failed');
+    is('wire row: a thrown write prints its own message', subText(row), 'network down');
+
+    // 问号气泡：默认收起，点开之后展开，正文就是那一句定稿；状态怎么变它都在。
+    is('wire row: the bubble starts closed', helpButtonOf(row)?.props?.['aria-expanded'], 'false');
+    click(helpButtonOf(row), 'wire row: the bubble button has a click handler');
+    await flush();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: the bubble opens on click', helpButtonOf(row)?.props?.['aria-expanded'], 'true');
+    is(
+      'wire row: the bubble shows the takeover explanation',
+      textOf(findClass(tree, 'dsh-context-zip__bubble')),
+      '插件接管压缩后才生效，接管后需重启一次 harness。',
+    );
+    click(helpButtonOf(row), 'wire row: the bubble button can close it again');
+    await flush();
+    tree = await paint();
+    row = rowOf(tree);
+    is('wire row: the bubble closes on a second click', helpButtonOf(row)?.props?.['aria-expanded'], 'false');
+
+    // 构建产物里也要有那两件事：同一路径的 POST，以及 JSON 内容类型。
+    // esbuild 会把引号统一成双引号，所以这里按产物自己的写法查。
+    const bundle = await readFile(join(here, '..', 'lib', 'client.js'), 'utf8');
+    ok('wire row: the bundle carries the wire route', bundle.includes('"/dsh-context-zip/wire"'));
+    ok(
+      'wire row: the wire POST declares a JSON body',
+      /fetch\(WIRE_ROUTE, \{\s*method: "POST",\s*headers: \{ "content-type": "application\/json" \}/u.test(bundle),
+    );
+
+    // ── 技能包里的硬规则落到样式上 ─────────────────────────────────────────
+    // 这两条来自 `ProjectSkills`：ui-ux-pro-max 的 AA 对比度与「> 300 ms 的等待必须
+    // 有反馈」，taste-skill 的「状态点只在承载真实语义时用，且一节只一颗」与「动画
+    // 必须有理由」。对比度本身算不出来（颜色由宿主令牌给，浅深两套都在宿主侧），
+    // 所以这里钉的是它的前提：这一块的颜色全部来自宿主令牌，没有自造色值。
+    const panelSource = await readFile(join(here, '..', 'client', 'index.ts'), 'utf8');
+    const wireCss = panelSource.slice(
+      panelSource.indexOf('.dsh-context-zip__wire{'),
+      panelSource.indexOf('.dsh-context-zip__wire-btn{'),
+    );
+    is('wire row: the wire style block is present', wireCss.length > 0, true);
+    is('wire row: the wire styles paint no raw colour', /#[0-9a-fA-F]{3,8}\b|rgba?\(/u.test(wireCss), false);
+    is(
+      'wire row: the open dot is drawn with the panel border token',
+      /\.dsh-context-zip__wire-dot\{[^}]*border:1\.5px solid var\(--dsw-alias-label-tertiary\)/u.test(panelSource),
+      true,
+    );
+    is(
+      'wire row: shape carries the state, not colour alone (transparent centre)',
+      /\.dsh-context-zip__wire-dot\{[^}]*background:transparent/u.test(panelSource),
+      true,
+    );
+    is(
+      'wire row: the wired dot is filled with the accent token',
+      /\.dsh-context-zip__wire-dot\[data-face="on"\]\{[^}]*background:var\(--dsw-alias-button-primary-fill\)/u.test(panelSource),
+      true,
+    );
+    is(
+      'wire row: the failed dot is filled with the error token',
+      /\.dsh-context-zip__wire-dot\[data-face="error"\]\{[^}]*background:var\(--dsw-alias-state-error-primary\)/u.test(panelSource),
+      true,
+    );
+    is(
+      'wire row: the dot transition uses the panel duration and easing tokens',
+      /\.dsh-context-zip__wire-dot\{[^}]*transition:background-color var\(--cz-dur\) var\(--cz-ease\),border-color var\(--cz-dur\) var\(--cz-ease\)/u.test(
+        panelSource,
+      ),
+      true,
+    );
+    is('wire row: the panel keeps its 200 ms transition token', /--cz-dur:200ms/u.test(panelSource), true);
+    is(
+      'wire row: the busy ring runs on its own token',
+      /animation:cz-wire-pulse var\(--cz-pulse\) var\(--cz-ease\) infinite/u.test(panelSource),
+      true,
+    );
+    is(
+      'wire row: the pulse animates transform and opacity only',
+      /@keyframes cz-wire-pulse\{0%\{transform:scale\(1\);opacity:\.5\}70%,100%\{transform:scale\(1\.9\);opacity:0\}\}/u.test(panelSource),
+      true,
+    );
+    is('wire row: no raw time value is written in the wire styles', /\d+m?s\b/u.test(wireCss), false);
+    const pulseMs = Number(/--cz-pulse:(\d+)ms/u.exec(panelSource)?.[1]);
+    is('wire row: the pulse stays at or under two seconds', pulseMs > 0 && pulseMs <= 2000, true);
+    is('wire row: the pulse runs at the documented 1.2 seconds', pulseMs, 1200);
+    is(
+      'wire row: reduced motion stops the pulse too',
+      /@media \(prefers-reduced-motion:reduce\)\{\.dsh-context-zip \*,\.dsh-context-zip-mode \*\{transition:none!important;animation:none!important\}\}/u.test(
+        panelSource,
+      ),
+      true,
+    );
+    is(
+      'wire row: the action reuses the panel button instead of inventing a second style',
+      /className: 'dsh-context-zip__btn dsh-context-zip__btn--outline dsh-context-zip__wire-btn'/u.test(panelSource),
+      true,
+    );
+    is('wire row: the action keeps the panel control height', /\.dsh-context-zip__btn\{min-height:32px/u.test(panelSource), true);
+    is(
+      'wire row: the disabled action is greyed out, hover included',
+      /\.dsh-context-zip__wire-btn:disabled,\.dsh-context-zip__wire-btn:disabled:hover\{[^}]*opacity:\.55[^}]*cursor:default/u.test(panelSource),
+      true,
+    );
+
+    // ── 行高与对齐：三样横排，两条文字行正好填满 --cz-row-h ─────────────────
+    is(
+      'wire row: the row keeps the panel row height',
+      /\.dsh-context-zip__wire\{display:flex;align-items:center;gap:16px;min-height:var\(--cz-row-h\)\}/u.test(panelSource),
+      true,
+    );
+    is(
+      'wire row: the title block does not stretch',
+      /\.dsh-context-zip__wire-title\{flex:none;/u.test(panelSource),
+      true,
+    );
+    is(
+      'wire row: the middle block stacks the two lines',
+      /\.dsh-context-zip__wire-body\{[^}]*flex-direction:column\}/u.test(panelSource),
+      true,
+    );
+    is(
+      'wire row: the main line uses the medium line token',
+      /\.dsh-context-zip__wire-main\{[^}]*line-height:var\(--cz-line-md\)/u.test(panelSource),
+      true,
+    );
+    is(
+      'wire row: the sub line uses the small line token',
+      /\.dsh-context-zip__wire-sub\{[^}]*line-height:var\(--cz-line-sm\)/u.test(panelSource),
+      true,
+    );
+    is(
+      'wire row: the two line tokens add up to the row height, so no button state is shorter',
+      /--cz-line-sm:18px;--cz-line-md:22px;/u.test(panelSource) && /--cz-row-h:40px;/u.test(panelSource),
+      true,
+    );
+    is(
+      'wire row: the sub line is indented clear of the dot',
+      /\.dsh-context-zip__wire-sub\{[^}]*padding-left:16px/u.test(panelSource),
+      true,
+    );
+    is(
+      'wire row: the button is the last flex item, so its right edge matches the segment control',
+      /\.dsh-context-zip__wire-btn\{flex:none\}/u.test(panelSource) && /\.dsh-context-zip__row-ctl\{margin-left:auto;/u.test(panelSource),
+      true,
+    );
+  } finally {
+    globalThis.window = priorWindow;
+    globalThis.document = priorDocument;
+    globalThis.fetch = priorFetch;
+    globalThis.setInterval = priorSetInterval;
+    globalThis.clearInterval = priorClearInterval;
+  }
 }
 
 // ---------------------------------------------------------------------------

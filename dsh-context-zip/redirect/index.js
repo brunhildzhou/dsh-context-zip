@@ -14,7 +14,7 @@
  * @module @deepseek-ai/dsh-compaction-basic (context-zip redirect)
  */
 import { BasicCompactionEngine } from './base.js';
-import { createContextZipEngine } from 'dsh-context-zip-engine';
+import { createContextZipEngine } from 'dsh-context-zip/engine';
 
 /** The shipped backend with dsh-context-zip's five-section, notes-aware summarizer. */
 export const ContextZipEngine = createContextZipEngine(BasicCompactionEngine);

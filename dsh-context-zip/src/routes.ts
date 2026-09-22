@@ -8,6 +8,17 @@
  * loopback-only, and the write route additionally requires the JSON content type
  * so a cross-site form post cannot reach it.
  *
+ * `/wire` is the one route that writes outside the settings namespace: it points
+ * the `compaction-basic` row at this plugin by putting a redirect package into the
+ * profile's `node_modules`. Its `GET` answers whether that has happened. Its `POST`
+ * does the write, and the work itself lives in `./wire.ts` so the guards stay in one
+ * readable place. BOTH answers carry `processStartedAt` — when this harness process
+ * began — so the panel can compare it against the stamp's `copiedAt` and tell a
+ * redirect written after this process loaded (a restart is pending) from one written
+ * before it. The `POST` answer needs it for the same reason the `GET` does: the
+ * stamp it just wrote is newer than this process by construction, so without the
+ * field the panel would judge the takeover already in effect until the next `GET`.
+ *
  * `settings` and `live` answer two different reads on purpose. The panel loads
  * `settings` once (it needs `value` to render the form) and then polls `live`
  * every few seconds; the poll only ever merges `effective` and the title map, so
@@ -96,8 +107,8 @@ function titlesNow(state, options, keys) {
  * Register the browser-facing routes.
  *
  * @param ctx - plugin context carrying `webServer`.
- * @param options - the settings scope, the segment reader, the mode reader, and
- *   the title memo factory.
+ * @param options - the settings scope, the segment reader, the mode reader, the
+ *   title memo factory, and the two wire callbacks.
  * @returns the disposers, or [] when no web server is composed.
  */
 export function registerRoutes(ctx, options) {
@@ -172,6 +183,49 @@ export function registerRoutes(ctx, options) {
           return respond(res, 200, { ok: true, value });
         } catch (error) {
           return respond(res, 400, { ok: false, error: String(error?.message ?? error) });
+        }
+      },
+    }),
+    webServer.register({
+      kind: 'exact',
+      path: `${ROUTE_PREFIX}/wire`,
+      handler: async (req, res) => {
+        // One path, two verbs: `GET` reports whether the compaction row is wired to
+        // this plugin, `POST` wires it. The write is a real filesystem change, so
+        // the same loopback and JSON-content-type gates the settings write uses
+        // apply to it; the read is gated like every other read.
+        if (!isLoopback(req)) return respond(res, 403, { ok: false, error: 'forbidden' });
+        if (req.method === 'GET') {
+          try {
+            const status = await options.readWireStatus();
+            // The start time rides on the read: the panel judges "restart required"
+            // from the pair (copiedAt, processStartedAt), not from `effective`.
+            return respond(res, 200, { ok: true, ...status, processStartedAt: processStartedAtNow() });
+          } catch (error) {
+            // A status read that cannot name the profile is answered as a failure:
+            // the panel says "cannot read" instead of drawing a wrong "unwired".
+            return respond(res, 500, { ok: false, error: String(error?.message ?? error) });
+          }
+        }
+        if (req.method !== 'POST') return respond(res, 405, { ok: false, error: 'method-not-allowed' });
+        if (!String(req.headers['content-type'] ?? '').includes('application/json')) {
+          return respond(res, 415, { ok: false, error: 'content-type-must-be-json' });
+        }
+        try {
+          const result = await options.wireRow();
+          // Same computed start time as the GET, for the same judgment. The stamp
+          // `wireRow` just wrote is newer than this process by construction, so the
+          // answer has to carry the other side of the comparison: without it the
+          // panel's optimistic verdict is "already in effect" until the next GET,
+          // and the user who just pressed the button is told the wrong thing.
+          return respond(res, 200, { ok: true, ...result, processStartedAt: processStartedAtNow() });
+        } catch (error) {
+          // Every refusal and every write failure travels as its own message: the
+          // panel's job is to show the reason, and a generic "failed" would hide
+          // the difference between "occupied by a real package" and "disk error".
+          // The start time rides along so both answers of this route are computed
+          // the same way; the failed branch reads only `error`.
+          return respond(res, 500, { ok: false, error: String(error?.message ?? error), processStartedAt: processStartedAtNow() });
         }
       },
     }),
@@ -328,6 +382,21 @@ function readManualFailure(options, sessionId) {
   } catch {
     return null;
   }
+}
+
+/**
+ * When this harness process began, computed at answer time and never stored.
+ *
+ * `Date.now()` minus `process.uptime()` is the one signal that tells a redirect
+ * written BEFORE this process loaded from one written after it: the panel's
+ * "restart required" is exactly `copiedAt > processStartedAt`. Both answers of the
+ * `/wire` route compute it here rather than sharing a stored value, because a
+ * stored copy would survive a restart and lie about which process is running.
+ *
+ * @returns this process's start as an ISO timestamp.
+ */
+function processStartedAtNow() {
+  return new Date(Date.now() - process.uptime() * 1000).toISOString();
 }
 
 /** Whether a request arrived over the loopback interface. */

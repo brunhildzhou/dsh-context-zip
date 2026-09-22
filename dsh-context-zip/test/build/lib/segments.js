@@ -618,10 +618,10 @@ import {
   RETRIEVAL_RECEIPT_NOTE as RETRIEVAL_RECEIPT_NOTE2,
   TOOL_RESULT_STORE_CEILING_CHARS as TOOL_RESULT_STORE_CEILING_CHARS2,
   clampToStoreCeiling as clampToStoreCeiling2
-} from "dsh-context-zip-engine/prompt";
+} from "dsh-context-zip/engine/prompt";
 
 // src/segments.ts
-import { SEQ_LIST_HEAD, SEQ_LIST_TAIL } from "dsh-context-zip-engine/prompt";
+import { SEQ_LIST_HEAD, SEQ_LIST_TAIL } from "dsh-context-zip/engine/prompt";
 async function readSessionEvents(ctx, session) {
   try {
     const own = session.snapshotEvents();
@@ -744,7 +744,7 @@ function latestContextWindow(events) {
 }
 
 // src/transcript.ts
-import { EVENT_TEXT_CHARS, HISTORY_READ_MAX_CHARS, SEQ_LIST_HEAD as SEQ_LIST_HEAD2, SEQ_LIST_TAIL as SEQ_LIST_TAIL2 } from "dsh-context-zip-engine/prompt";
+import { EVENT_TEXT_CHARS, HISTORY_READ_MAX_CHARS, SEQ_LIST_HEAD as SEQ_LIST_HEAD2, SEQ_LIST_TAIL as SEQ_LIST_TAIL2 } from "dsh-context-zip/engine/prompt";
 function renderEvent(event) {
   const data = event?.data ?? {};
   const head = `#${event.seq} ${event.type}`;
@@ -1869,7 +1869,7 @@ import {
   setSharedNotesReader,
   setSharedRewriteReader,
   runManualCompaction
-} from "dsh-context-zip-engine";
+} from "dsh-context-zip/engine";
 
 // src/models.ts
 import { BlockAssembler as BlockAssembler2, createUserMessage as createUserMessage2 } from "@deepseek-ai/dsh-llm";
@@ -1951,7 +1951,7 @@ import { Session } from "@deepseek-ai/dsh-session";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
-import { NOTES_MAX_CHARS as NOTES_MAX_CHARS2 } from "dsh-context-zip-engine/prompt";
+import { NOTES_MAX_CHARS as NOTES_MAX_CHARS2 } from "dsh-context-zip/engine/prompt";
 function contextZipRoot() {
   return dshHomePath("context-zip");
 }
@@ -2301,7 +2301,7 @@ ${paths.join("\n")}` };
 
 // src/manual.ts
 import { toolPairingBalancedBefore } from "@deepseek-ai/dsh-compaction";
-import { failureCount, isRangeTooSmallFailure } from "dsh-context-zip-engine";
+import { failureCount, isRangeTooSmallFailure } from "dsh-context-zip/engine";
 var ManualTargetError = class extends Error {
   /** Stable reason code, so the browser half can localize it. */
   code;
@@ -2465,7 +2465,7 @@ import {
   REMINDER_THRESHOLD_PERCENT,
   SUMMARY_HARD_CAP_TOKENS as SUMMARY_HARD_CAP_TOKENS2,
   SUMMARY_SOFT_TARGET_TOKENS as SUMMARY_SOFT_TARGET_TOKENS2
-} from "dsh-context-zip-engine/prompt";
+} from "dsh-context-zip/engine/prompt";
 
 // src/session-key.ts
 var SESSION_KEY = /^session-[A-Za-z0-9-]{1,120}$/;
@@ -2546,6 +2546,31 @@ function registerRoutes(ctx, options) {
           return respond(res, 200, { ok: true, value });
         } catch (error) {
           return respond(res, 400, { ok: false, error: String(error?.message ?? error) });
+        }
+      }
+    }),
+    webServer.register({
+      kind: "exact",
+      path: `${ROUTE_PREFIX}/wire`,
+      handler: async (req, res) => {
+        if (!isLoopback(req)) return respond(res, 403, { ok: false, error: "forbidden" });
+        if (req.method === "GET") {
+          try {
+            const status = await options.readWireStatus();
+            return respond(res, 200, { ok: true, ...status, processStartedAt: processStartedAtNow() });
+          } catch (error) {
+            return respond(res, 500, { ok: false, error: String(error?.message ?? error) });
+          }
+        }
+        if (req.method !== "POST") return respond(res, 405, { ok: false, error: "method-not-allowed" });
+        if (!String(req.headers["content-type"] ?? "").includes("application/json")) {
+          return respond(res, 415, { ok: false, error: "content-type-must-be-json" });
+        }
+        try {
+          const result = await options.wireRow();
+          return respond(res, 200, { ok: true, ...result, processStartedAt: processStartedAtNow() });
+        } catch (error) {
+          return respond(res, 500, { ok: false, error: String(error?.message ?? error), processStartedAt: processStartedAtNow() });
         }
       }
     }),
@@ -2680,12 +2705,15 @@ function readManualFailure(options, sessionId) {
     return null;
   }
 }
+function processStartedAtNow() {
+  return new Date(Date.now() - process.uptime() * 1e3).toISOString();
+}
 function isLoopback(req) {
   const address = req.socket?.remoteAddress ?? "";
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 function readJsonBody(req) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve2, reject) => {
     let data = "";
     req.on("data", (chunk) => {
       data += chunk;
@@ -2695,9 +2723,9 @@ function readJsonBody(req) {
       }
     });
     req.on("end", () => {
-      if (data.length === 0) return resolve({});
+      if (data.length === 0) return resolve2({});
       try {
-        resolve(JSON.parse(data));
+        resolve2(JSON.parse(data));
       } catch {
         reject(new Error("invalid JSON body"));
       }
@@ -2854,6 +2882,267 @@ function createTitleMemo(options) {
     return { ...resolved };
   };
   return { titles, refresh, ttlMs };
+}
+
+// src/wire.ts
+import { cp, lstat, mkdir as mkdir3, readFile as readFile2, readdir as readdir2, realpath, rm as rm2, stat, writeFile as writeFile3 } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { basename, dirname as dirname2, join as join3, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { dshHomePath as dshHomePath2 } from "@deepseek-ai/dsh-home-paths";
+var REDIRECT_PACKAGE = "@deepseek-ai/dsh-compaction-basic";
+var REDIRECT_MARKER = "context-zip";
+var STAMP_FILE = "base.json";
+var PLUGIN_NAME = "dsh-context-zip";
+async function canonical(target) {
+  return realpath(target).catch(() => resolve(target));
+}
+function isInside(real, root) {
+  return real === root || real.startsWith(`${root}${sep}`);
+}
+async function flattenPath(target) {
+  const parts = [];
+  let probe = target;
+  for (; ; ) {
+    try {
+      return { flattened: join3(await realpath(probe), ...parts), anchor: probe, rest: parts };
+    } catch {
+      const parent = dirname2(probe);
+      if (parent === probe) return { flattened: target, anchor: probe, rest: [] };
+      parts.unshift(basename(probe));
+      probe = parent;
+    }
+  }
+}
+async function assertPathInsideProfile(target, label, profileReal) {
+  const absolute = resolve(target);
+  const { flattened, anchor, rest } = await flattenPath(absolute);
+  if (!isInside(flattened, profileReal)) {
+    throw new Error(
+      `${label} is ${absolute}, which resolves to ${flattened}, outside the profile ${profileReal}. This route writes through symlinks. Refusing before anything is written. Fix: make the affected directory a real directory and symlink each package inside it individually, instead of symlinking the directory as a whole.`
+    );
+  }
+  let current = anchor;
+  for (const segment of rest) {
+    const candidate = join3(current, segment);
+    let stats;
+    try {
+      stats = await lstat(candidate);
+    } catch {
+      break;
+    }
+    current = candidate;
+    if (stats.isSymbolicLink()) {
+      let resolved;
+      try {
+        resolved = await realpath(current);
+      } catch {
+        throw new Error(
+          `${label} is hidden behind the symlink ${current}, which points at nothing that exists. This route writes through symlinks, so it cannot tell where that would land. Refusing.`
+        );
+      }
+      if (!isInside(resolved, profileReal)) {
+        throw new Error(
+          `${label} is hidden behind the symlink ${current}, which resolves to ${resolved}, outside the profile ${profileReal}. This route writes through symlinks. Refusing before anything is written. Fix: make the directory that holds it a real directory and symlink each package inside that directory individually, instead of symlinking the directory as a whole.`
+        );
+      }
+    }
+  }
+  return flattened;
+}
+async function profileRejection(dir, pluginDir) {
+  const real = await canonical(dir);
+  const pluginReal = await canonical(pluginDir);
+  if (real === pluginReal) return "it is the directory this plugin itself lives in";
+  let manifest;
+  try {
+    manifest = JSON.parse(await readFile2(join3(dir, "package.json"), "utf8"));
+  } catch {
+    return "there is no readable package.json there";
+  }
+  if (manifest?.name === PLUGIN_NAME) return "its package.json names this plugin";
+  return null;
+}
+async function profileFromHome(pluginDir) {
+  const profiles = join3(dshHomePath2(), "profiles");
+  let names;
+  try {
+    names = await readdir2(profiles);
+  } catch {
+    return null;
+  }
+  const pluginReal = await canonical(pluginDir);
+  const matches = [];
+  for (const name of names) {
+    const dir = join3(profiles, name);
+    let here;
+    try {
+      here = await realpath(join3(dir, "node_modules", PLUGIN_NAME));
+    } catch {
+      continue;
+    }
+    if (here !== pluginReal) continue;
+    if (await profileRejection(dir, pluginDir) !== null) continue;
+    matches.push(dir);
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+async function resolveProfileDirectory(baseUrl, pluginDir) {
+  const typed = typeof baseUrl === "string" && baseUrl.length > 0 ? toDirectory(baseUrl) : null;
+  if (typed !== null) {
+    const rejection = await profileRejection(typed, pluginDir);
+    if (rejection === null) return typed;
+    const fromHome2 = await profileFromHome(pluginDir);
+    if (fromHome2 !== null) return fromHome2;
+    throw new Error(
+      `the DSH context base URL is ${typed}, and that is not a profile: ${rejection}. No profile under ${join3(dshHomePath2(), "profiles")} holds this plugin either, so the profile cannot be named. Refusing to write: guessing a profile would put the redirect in somebody else's tree. Re-run \`node install.mjs --profile-dir <profile>\` instead.`
+    );
+  }
+  const fromHome = await profileFromHome(pluginDir);
+  if (fromHome !== null) return fromHome;
+  throw new Error(
+    `the DSH context carries no base URL, and no profile under ${join3(dshHomePath2(), "profiles")} holds this plugin, so the profile cannot be named. Refusing to write: guessing a profile would put the redirect in somebody else's tree. Re-run \`node install.mjs --profile-dir <profile>\` instead.`
+  );
+}
+function toDirectory(candidate) {
+  if (candidate.startsWith("file:")) {
+    try {
+      return fileURLToPath(candidate);
+    } catch {
+      return null;
+    }
+  }
+  return resolve(candidate);
+}
+async function resolveModulesRoot(profileDir, profileReal) {
+  const modules = resolve(join3(profileDir, "node_modules"));
+  const { flattened } = await flattenPath(modules);
+  if (!isInside(flattened, profileReal)) {
+    throw new Error(
+      `${modules} resolves to ${flattened}, which is outside the profile ${profileReal}. This route writes through symlinks. Refusing before anything is written. Fix: make node_modules a real directory and symlink each package inside it individually.`
+    );
+  }
+  if (flattened === profileReal) {
+    throw new Error(
+      `${modules} resolves to the profile directory itself (${profileReal}), not to a directory inside it. Refusing to write into the profile root.`
+    );
+  }
+  return flattened;
+}
+async function redirectTarget(profileDir, profileReal) {
+  const modulesRoot = await resolveModulesRoot(profileDir, profileReal);
+  const target = join3(modulesRoot, REDIRECT_PACKAGE);
+  return assertPathInsideProfile(target, "the redirect directory", profileReal);
+}
+async function redirectOccupant(redirectDir) {
+  let manifest;
+  try {
+    manifest = JSON.parse(await readFile2(join3(redirectDir, "package.json"), "utf8"));
+  } catch {
+    return "absent";
+  }
+  return String(manifest.version ?? "").includes(REDIRECT_MARKER) ? "ours" : "foreign";
+}
+async function readStamp(redirectDir) {
+  try {
+    const stamp = JSON.parse(await readFile2(join3(redirectDir, STAMP_FILE), "utf8"));
+    return stamp !== null && typeof stamp === "object" ? stamp : null;
+  } catch {
+    return null;
+  }
+}
+async function basePackageDir(profileDir) {
+  const require2 = createRequire(join3(profileDir, "package.json"));
+  for (const base of require2.resolve.paths(REDIRECT_PACKAGE) ?? []) {
+    const candidate = join3(base, REDIRECT_PACKAGE);
+    let manifest;
+    try {
+      manifest = JSON.parse(await readFile2(join3(candidate, "package.json"), "utf8"));
+    } catch {
+      continue;
+    }
+    if (String(manifest.version ?? "").includes(REDIRECT_MARKER)) continue;
+    return candidate;
+  }
+  throw new Error(`cannot locate a shipped ${REDIRECT_PACKAGE} from ${profileDir}`);
+}
+async function readWireStatus(options) {
+  const { baseUrl, pluginDir } = options ?? {};
+  const profileDir = await resolveProfileDirectory(baseUrl, pluginDir);
+  const profileReal = await canonical(profileDir);
+  const redirectDir = await redirectTarget(profileDir, profileReal);
+  const occupant = await redirectOccupant(redirectDir);
+  if (occupant !== "ours") {
+    return { wired: false, version: null, copiedAt: null, stale: false, foreign: occupant === "foreign" };
+  }
+  const stamp = await readStamp(redirectDir);
+  if (stamp === null) {
+    return { wired: false, version: null, copiedAt: null, stale: false, partial: true };
+  }
+  const version = typeof stamp.version === "string" ? stamp.version : null;
+  let stale = false;
+  let current = null;
+  try {
+    const shippedDir = await basePackageDir(profileDir);
+    const shipped = JSON.parse(await readFile2(join3(shippedDir, "package.json"), "utf8"));
+    current = String(shipped.version ?? "unknown");
+    stale = current !== version;
+  } catch {
+  }
+  return {
+    wired: true,
+    version,
+    current,
+    copiedAt: typeof stamp.copiedAt === "string" ? stamp.copiedAt : null,
+    stale,
+    foreign: false
+  };
+}
+async function wireCompactionRow(options) {
+  const { baseUrl, pluginDir } = options ?? {};
+  const profileDir = await resolveProfileDirectory(baseUrl, pluginDir);
+  const profileReal = await canonical(profileDir);
+  const redirectDir = await redirectTarget(profileDir, profileReal);
+  const occupant = await redirectOccupant(redirectDir);
+  if (occupant === "foreign") {
+    throw new Error(
+      `${redirectDir} holds a real ${REDIRECT_PACKAGE}, not this plugin's redirect: refusing to overwrite a package this plugin did not put there. Move that copy up to ${join3(dirname2(profileDir), "node_modules")} (the shared level, where the backend is expected) and press the button again.`
+    );
+  }
+  const baseDir = await basePackageDir(profileDir);
+  const baseManifest = JSON.parse(await readFile2(join3(baseDir, "package.json"), "utf8"));
+  if (String(baseManifest.version ?? "").includes(REDIRECT_MARKER)) {
+    throw new Error(
+      `${baseDir} is a previous redirect, not the shipped backend: remove ${redirectDir} and press the button again so the real package resolves.`
+    );
+  }
+  const baseEntry = join3(baseDir, baseManifest.exports?.["."]?.default ?? baseManifest.main);
+  const baseSource = await readFile2(baseEntry);
+  const version = String(baseManifest.version ?? "unknown");
+  const sourceDir = join3(pluginDir, "redirect");
+  const sourceIndex = join3(sourceDir, "index.js");
+  const sourceManifest = join3(sourceDir, "package.json");
+  try {
+    await stat(sourceIndex);
+    await stat(sourceManifest);
+  } catch (error) {
+    throw new Error(
+      `this plugin's own redirect files are missing under ${sourceDir}: ${String(error?.message ?? error)}. Reinstall the plugin package and press the button again.`
+    );
+  }
+  const stamp = {
+    package: REDIRECT_PACKAGE,
+    version,
+    source: baseDir,
+    copiedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  await rm2(redirectDir, { recursive: true, force: true });
+  await mkdir3(redirectDir, { recursive: true });
+  await cp(sourceManifest, join3(redirectDir, "package.json"));
+  await cp(sourceIndex, join3(redirectDir, "index.js"));
+  await writeFile3(join3(redirectDir, "base.js"), baseSource);
+  await writeFile3(join3(redirectDir, STAMP_FILE), JSON.stringify(stamp, void 0, 2) + "\n");
+  return { wired: true, version, copiedAt: stamp.copiedAt, source: baseDir };
 }
 
 // src/panel-copy.ts
@@ -3034,10 +3323,10 @@ function effectiveMode(live) {
 }
 
 // test/entry.ts
-import { buildSummarizationInstruction, createContextZipEngine, setSharedModeReader as setSharedModeReader2, summarizeTarget, setSharedFallbackReader as setSharedFallbackReader2, resetFailureStreaks, failureCount as failureCount2, isRangeTooSmallFailure as isRangeTooSmallFailure2, buildMechanicalSummary, messageVisibleText as messageVisibleText2 } from "dsh-context-zip-engine";
-import { SUMMARY_HARD_CAP_TOKENS as SUMMARY_HARD_CAP_TOKENS3, SUMMARY_SOFT_TARGET_TOKENS as SUMMARY_SOFT_TARGET_TOKENS3, NOTES_MAX_CHARS as NOTES_MAX_CHARS4, SUMMARY_HEADINGS as SUMMARY_HEADINGS3 } from "dsh-context-zip-engine/prompt";
-import { buildRewriteInstruction as buildRewriteInstruction2 } from "dsh-context-zip-engine/prompt";
-import { setSharedRewriteReader as setSharedRewriteReader2, lowestReasoningEffort, addedClaims, resolveRewriteRoute, runRewriteCall } from "dsh-context-zip-engine";
+import { buildSummarizationInstruction, createContextZipEngine, setSharedModeReader as setSharedModeReader2, summarizeTarget, setSharedFallbackReader as setSharedFallbackReader2, resetFailureStreaks, failureCount as failureCount2, isRangeTooSmallFailure as isRangeTooSmallFailure2, buildMechanicalSummary, messageVisibleText as messageVisibleText2 } from "dsh-context-zip/engine";
+import { SUMMARY_HARD_CAP_TOKENS as SUMMARY_HARD_CAP_TOKENS3, SUMMARY_SOFT_TARGET_TOKENS as SUMMARY_SOFT_TARGET_TOKENS3, NOTES_MAX_CHARS as NOTES_MAX_CHARS4, SUMMARY_HEADINGS as SUMMARY_HEADINGS3 } from "dsh-context-zip/engine/prompt";
+import { buildRewriteInstruction as buildRewriteInstruction2 } from "dsh-context-zip/engine/prompt";
+import { setSharedRewriteReader as setSharedRewriteReader2, lowestReasoningEffort, addedClaims, resolveRewriteRoute, runRewriteCall } from "dsh-context-zip/engine";
 
 // client/live.ts
 var LIVE_POLL_MS = 5e3;
@@ -3155,6 +3444,64 @@ function rowsAfterSave(group, previousRows, serverValue) {
   return toRows(serverValue?.agents ?? {});
 }
 var SAVE_FEEDBACK_MS = 1500;
+function wireStatusFrom(payload, action) {
+  if (payload === null || payload === void 0 || payload.ok !== true) return "unknown";
+  if (payload.foreign === true) return "taken";
+  if (payload.wired !== true) return payload.partial === true ? "incomplete" : "inactive";
+  if (action === "taking") return "taking";
+  if (action === "failed") return "failed";
+  if (payload.stale === true) return "update";
+  if (redirectIsNewerThanProcess(payload)) return "restart";
+  return "active";
+}
+function redirectIsNewerThanProcess(payload) {
+  const copiedAt = payload?.copiedAt;
+  const processStartedAt = payload?.processStartedAt;
+  if (typeof copiedAt !== "string" || copiedAt.length === 0) return false;
+  if (typeof processStartedAt !== "string" || processStartedAt.length === 0) return false;
+  const copied = Date.parse(copiedAt);
+  const started = Date.parse(processStartedAt);
+  if (Number.isFinite(copied) === false || Number.isFinite(started) === false) return false;
+  return copied > started;
+}
+function wireText(status, payload, strings, locale = "zh") {
+  const stampVersion = typeof payload?.version === "string" && payload.version.length > 0 ? payload.version : "";
+  const version = stampVersion.length > 0 ? stampVersion : strings.versionUnknown;
+  const current = typeof payload?.current === "string" ? payload.current : "";
+  const at = stampText(payload?.copiedAt);
+  const sep2 = locale === "en" ? ", " : "\uFF0C";
+  if (status === "loading") return { main: strings.loading, sub: "", action: "" };
+  if (status === "taking") return { main: strings.takingMain, sub: strings.takingSub, action: strings.takeover };
+  if (status === "active") {
+    const sub = at.length > 0 ? `${strings.activeSubPrefix} ${version}${sep2}${at}` : `${strings.activeSubPrefix} ${version}`;
+    return { main: strings.activeMain, sub, action: "" };
+  }
+  if (status === "update") {
+    return { main: strings.updateMain, sub: strings.updateTpl(current, version), action: strings.reconnect };
+  }
+  if (status === "restart") return { main: strings.restartMain, sub: strings.restartSub, action: "" };
+  if (status === "taken") return { main: strings.inactiveMain, sub: strings.takenSub, action: "" };
+  if (status === "incomplete") {
+    return { main: strings.incompleteMain, sub: strings.incompleteSub, action: strings.retry };
+  }
+  if (status === "unknown") return { main: strings.unknownMain, sub: strings.unknownSub, action: strings.retry };
+  if (status === "failed") return { main: strings.failMain, sub: String(payload?.error ?? ""), action: strings.retry };
+  return { main: strings.inactiveMain, sub: strings.inactiveSub, action: strings.takeover };
+}
+function wireFace(status) {
+  if (status === "taking") return "busy";
+  if (status === "active") return "on";
+  if (status === "failed") return "error";
+  return "off";
+}
+function stampText(iso) {
+  if (typeof iso !== "string" || iso.length === 0) return "";
+  const ms = Date.parse(iso);
+  if (Number.isFinite(ms) === false) return "";
+  const at = new Date(ms);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
 function settingsShape(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(settingsShape).join(",")}]`;
@@ -3210,9 +3557,12 @@ export {
   NOTES_MAX_CHARS4 as NOTES_MAX_CHARS,
   NoteStore,
   PROBE_MAX_TOKENS,
+  REDIRECT_MARKER,
+  REDIRECT_PACKAGE,
   SAVE_FEEDBACK_MS,
   SESSION_KEY,
   SETTINGS_NS,
+  STAMP_FILE,
   SUMMARY_HARD_CAP_TOKENS3 as SUMMARY_HARD_CAP_TOKENS,
   SUMMARY_HEADINGS3 as SUMMARY_HEADINGS,
   SUMMARY_SOFT_TARGET_TOKENS3 as SUMMARY_SOFT_TARGET_TOKENS,
@@ -3221,8 +3571,10 @@ export {
   TOOL_RESULT_STORE_CEILING_CHARS,
   addedClaims,
   applySettingsPatch,
+  assertPathInsideProfile,
   attributeSummarySections,
   auditUnsupportedClaims,
+  basePackageDir,
   buildMechanicalSummary,
   buildRewriteInstruction2 as buildRewriteInstruction,
   buildSummarizationInstruction,
@@ -3271,6 +3623,7 @@ export {
   readFailureCount,
   readModelCatalog,
   readSessionEvents,
+  readWireStatus,
   registerExportCommand,
   registerManualCompactCommand,
   registerRoutes,
@@ -3282,6 +3635,7 @@ export {
   resetFailureStreaks,
   resolveMode,
   resolveModeFrom,
+  resolveProfileDirectory,
   resolveRetrieval,
   resolveRetrievalFrom,
   resolveRewriteRoute,
@@ -3304,11 +3658,16 @@ export {
   setTracePath,
   snapWindow,
   sortBySeq,
+  stampText,
   startLivePoll,
   startModeReadRetry,
   summarizeTarget,
   titlesFrom,
   toRows,
   trimToLimit,
-  utf8Bytes
+  utf8Bytes,
+  wireCompactionRow,
+  wireFace,
+  wireStatusFrom,
+  wireText
 };

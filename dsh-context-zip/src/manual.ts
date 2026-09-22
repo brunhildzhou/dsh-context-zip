@@ -26,7 +26,7 @@
 
 import { toolPairingBalancedBefore } from '@deepseek-ai/dsh-compaction';
 
-import { failureCount, isRangeTooSmallFailure } from 'dsh-context-zip-engine';
+import { failureCount, isRangeTooSmallFailure } from 'dsh-context-zip/engine';
 
 /** Why a manual compaction could not even be planned. */
 export type ManualTargetCode = 'session-not-live' | 'no-live-session' | 'session-required';

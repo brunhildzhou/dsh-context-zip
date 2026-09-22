@@ -2,17 +2,19 @@
 /**
  * Install dsh-context-zip into a dsh profile.
  *
- * Three packages have to agree for the compaction row to point at this plugin:
+ * Two things have to agree for the compaction row to point at this plugin:
  *
- * 1. `dsh-context-zip` — the plugin itself (tools, settings section, routes).
- * 2. `dsh-context-zip-engine` — the backend class factory.
- * 3. `@deepseek-ai/dsh-compaction-basic` under the profile — the redirect that
+ * 1. `dsh-context-zip` — the plugin itself: tools, settings section, routes, and
+ *    the compaction engine it carries at `engine/`. The plugin reaches that
+ *    engine through its own `./engine` subpath, so it loads with no second
+ *    package installed beside it.
+ * 2. `@deepseek-ai/dsh-compaction-basic` under the profile — the redirect that
  *    the `compaction-basic` row's name resolves to. It carries a copy of the
  *    shipped backend as `base.js`.
  *
- * The first two are inert on their own; only the redirect changes what the
- * harness mounts. Every step is a plain file copy, so it is reversible by
- * deleting the three directories and the profile entry.
+ * The plugin is inert on its own; only the redirect changes what the harness
+ * mounts. Every step is a plain file copy, so it is reversible by deleting the
+ * two directories and the profile entry.
  *
  * Usage:
  *   node install.mjs --profile-dir <dir> [--uninstall | --purge | --check] [--home <dir>]
@@ -43,6 +45,11 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PLUGIN = 'dsh-context-zip';
+/**
+ * Older releases installed the engine as a package of its own. The name is kept
+ * only so installs and uninstalls still clear that leftover; the engine now
+ * travels inside the plugin directory.
+ */
 const ENGINE = 'dsh-context-zip-engine';
 const REDIRECT = '@deepseek-ai/dsh-compaction-basic';
 
@@ -823,10 +830,8 @@ await cp(here, pluginDir, {
   recursive: true,
   filter: (source) => !DEV_ONLY.test(source) && !source.endsWith('install.mjs'),
 });
-await cp(join(here, 'engine'), engineDir, {
-  recursive: true,
-  filter: (source) => !DEV_ONLY.test(source),
-});
+// The engine is not copied on its own: it lives inside the plugin directory and
+// the plugin imports it through `dsh-context-zip/engine`.
 await mkdir(join(redirectDir), { recursive: true });
 await cp(join(here, 'redirect', 'package.json'), join(redirectDir, 'package.json'));
 await cp(join(here, 'redirect', 'index.js'), join(redirectDir, 'index.js'));
@@ -844,7 +849,6 @@ process.stdout.write(
   [
     `installed into ${profileDir}`,
     `  ${PLUGIN}       (the plugin)`,
-    `  ${ENGINE}       (the backend factory)`,
     `  ${REDIRECT}  (row redirect, wrapping ${baseVersion} from ${baseDir})`,
     `  profile bundle list now: ${manifest.dsh.profile.bundles.join(', ')}`,
     'restart the harness for the row swap to take effect',

@@ -42,7 +42,7 @@ import {
   TOOL_RESULT_STORE_CEILING_BYTES,
   clampToStoreCeiling,
   utf8Bytes,
-} from 'dsh-context-zip-engine/prompt';
+} from 'dsh-context-zip/engine/prompt';
 import {
   deriveSegments,
   deriveTurnStart,

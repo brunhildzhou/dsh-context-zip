@@ -13,7 +13,15 @@
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./engine": {
+      "types": "./engine/lib/types/index.d.ts",
+      "default": "./engine/lib/index.js"
+    },
+    "./engine/prompt": {
+      "types": "./engine/lib/types/prompt.d.ts",
+      "default": "./engine/lib/prompt.js"
+    }
   },
   "files": [
     "lib",

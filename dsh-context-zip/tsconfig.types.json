@@ -8,8 +8,8 @@
     "rootDir": "src",
     "outDir": "lib/types",
     "paths": {
-      "dsh-context-zip-engine": ["./engine/lib/types/index.d.ts"],
-      "dsh-context-zip-engine/prompt": ["./engine/lib/types/prompt.d.ts"]
+      "dsh-context-zip/engine": ["./engine/lib/types/index.d.ts"],
+      "dsh-context-zip/engine/prompt": ["./engine/lib/types/prompt.d.ts"]
     }
   },
   "include": ["src/**/*.ts"]

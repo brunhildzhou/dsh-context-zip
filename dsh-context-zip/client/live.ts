@@ -376,6 +376,191 @@ export function rowsAfterSave(group, previousRows, serverValue) {
  */
 export const SAVE_FEEDBACK_MS = 1500;
 
+/**
+ * The nine wiring states, judged in one fixed order.
+ *
+ * Nine, because six things the panel can know are distinct and the old four-phase
+ * model folded three of them into one sentence. The order is the whole function:
+ * the first rule that matches wins, so a read that failed outranks everything —
+ * a payload that never arrived says nothing about `foreign`, `wired` or `stale`,
+ * and guessing "unwired" from a failed read is exactly the mistake the read route
+ * was built to avoid. `taken` outranks the two unwired states because a foreign
+ * package is a fact about the path that a retry cannot change, and `incomplete`
+ * outranks plain `inactive` because it is the one unwired shape the button DOES
+ * fix (`partial` is this plugin's own redirect marker with no stamp beside it).
+ *
+ * `taking` and `failed` are the panel's own action, not the payload's: a write in
+ * flight and a write that was refused are local facts with no field on `GET
+ * /dsh-context-zip/wire`, so the caller passes them in. They sit after the two
+ * unwired states on purpose — a request can only be "taking over" a row that the
+ * read already reports as wired.
+ *
+ * `restart` is the one state that needs positive evidence, and it no longer reads
+ * `effective`. `/live`'s `effective.compaction` comes from the settings switch, so
+ * it reports what the NEXT compaction would use and says nothing about whether THIS
+ * process loaded the redirect; it said "restart" even when the running process had
+ * already picked the plugin up. The real signal is a pair of timestamps from the
+ * `GET /dsh-context-zip/wire` body: the stamp's `copiedAt` (when the redirect was
+ * written) and `processStartedAt` (when the running process began). `restart` means
+ * `wired` is true and `copiedAt` is strictly LATER than `processStartedAt` — the
+ * redirect landed after this process loaded, so only a restart can pick it up.
+ *
+ * Missing or unparseable timestamps do NOT answer `restart`: a value that never
+ * arrived says nothing, and "waiting on a restart" is a claim that needs proof. The
+ * row falls back to `active` instead, which is the reading that matches a healthy
+ * wiring. `active` is therefore `wired` true, not `stale`, and not `restart`.
+ *
+ * The `effective` argument the old signature took is gone entirely, so a panel
+ * that could not read `/live` no longer answers `unknown` for a healthy wiring,
+ * and the row needs no extra request to decide `restart`.
+ *
+ * @param payload - the `GET /dsh-context-zip/wire` body, carrying `copiedAt` and
+ *   `processStartedAt`.
+ * @param action - `'taking'` while a wire request is in flight, `'failed'` when
+ *   one failed; anything else means no action is pending.
+ * @returns one of `unknown`, `taken`, `incomplete`, `inactive`, `taking`,
+ *   `failed`, `update`, `restart`, `active`.
+ */
+export function wireStatusFrom(payload, action) {
+  if (payload === null || payload === undefined || payload.ok !== true) return 'unknown';
+  if (payload.foreign === true) return 'taken';
+  if (payload.wired !== true) return payload.partial === true ? 'incomplete' : 'inactive';
+  if (action === 'taking') return 'taking';
+  if (action === 'failed') return 'failed';
+  if (payload.stale === true) return 'update';
+  if (redirectIsNewerThanProcess(payload)) return 'restart';
+  return 'active';
+}
+
+/**
+ * Whether the redirect was written after the running process began.
+ *
+ * Both sides must be present and parseable; anything less is not evidence, and the
+ * caller treats it as "not a pending restart" rather than guessing. `copiedAt`
+ * comes from the stamp, `processStartedAt` from the `GET /dsh-context-zip/wire`
+ * read, and they are the same clock face: `Date.parse` on ISO strings.
+ *
+ * @param payload - the wire status payload.
+ * @returns true only when both timestamps parse and `copiedAt` is later.
+ */
+function redirectIsNewerThanProcess(payload) {
+  const copiedAt = payload?.copiedAt;
+  const processStartedAt = payload?.processStartedAt;
+  if (typeof copiedAt !== 'string' || copiedAt.length === 0) return false;
+  if (typeof processStartedAt !== 'string' || processStartedAt.length === 0) return false;
+  const copied = Date.parse(copiedAt);
+  const started = Date.parse(processStartedAt);
+  if (Number.isFinite(copied) === false || Number.isFinite(started) === false) return false;
+  return copied > started;
+}
+
+/**
+ * What the row's two lines and its one button say, for one status.
+ *
+ * The copy lives in the locale table and the composition lives here, for the
+ * usual reason: this module has no react import, so the runtime checks can render
+ * every branch's wording without a browser.
+ *
+ * `main` is the state word, `sub` is the one line of detail under it, and
+ * `action` is the button's label or `''` when the status offers no button. The
+ * three no-button statuses are the ones with nothing left to click: `active` (in
+ * effect), `restart` (waiting on a restart only the user performs) and `taken`
+ * (another package's slot, left alone).
+ *
+ * The one locale-dependent join is the comma between the version and the time in
+ * the `active` line: Chinese uses the full-width `，` and English `, `. Every
+ * other separator is already inside the table's own template (`updateTpl`). Each
+ * owner drops an absent segment rather than leaving its separator dangling:
+ * `active` omits the time when `stampText` has none (`基于内置 0.1.5-rc.2，` was
+ * the shape of that bug), and `updateTpl` omits a version it was not given.
+ *
+ * Both lines that name the stamp's version — the `active` line and the `update`
+ * template's snapshot — print the locale's `versionUnknown` sentence when the
+ * stamp carries no version, so a missing field never becomes an empty slot
+ * (`基于内置 ，09-22 00:08` was the shape of that bug).
+ *
+ * @param status - one of the nine statuses, or `'loading'` before the read lands.
+ * @param payload - the shape the line reads: `version`, `copiedAt`, `current`, and
+ *   on a failed write the server's `error`.
+ * @param strings - the active locale's string table.
+ * @param locale - `'zh'` or `'en'`; picks the one punctuation mark above.
+ * @returns the two lines and the button label.
+ */
+export function wireText(status, payload, strings, locale = 'zh') {
+  const stampVersion = typeof payload?.version === 'string' && payload.version.length > 0 ? payload.version : '';
+  const version = stampVersion.length > 0 ? stampVersion : strings.versionUnknown;
+  const current = typeof payload?.current === 'string' ? payload.current : '';
+  const at = stampText(payload?.copiedAt);
+  const sep = locale === 'en' ? ', ' : '，';
+  if (status === 'loading') return { main: strings.loading, sub: '', action: '' };
+  if (status === 'taking') return { main: strings.takingMain, sub: strings.takingSub, action: strings.takeover };
+  if (status === 'active') {
+    // The time is the second segment of this line, so its absence is handled here:
+    // `stampText` answers `''` for a missing or unparseable stamp, and the naive
+    // `${prefix} ${version}${sep}${at}` would end in a dangling separator. Drop the
+    // whole segment instead; the line still names the version it is based on.
+    const sub = at.length > 0 ? `${strings.activeSubPrefix} ${version}${sep}${at}` : `${strings.activeSubPrefix} ${version}`;
+    return { main: strings.activeMain, sub, action: '' };
+  }
+  if (status === 'update') {
+    return { main: strings.updateMain, sub: strings.updateTpl(current, version), action: strings.reconnect };
+  }
+  if (status === 'restart') return { main: strings.restartMain, sub: strings.restartSub, action: '' };
+  if (status === 'taken') return { main: strings.inactiveMain, sub: strings.takenSub, action: '' };
+  if (status === 'incomplete') {
+    return { main: strings.incompleteMain, sub: strings.incompleteSub, action: strings.retry };
+  }
+  if (status === 'unknown') return { main: strings.unknownMain, sub: strings.unknownSub, action: strings.retry };
+  if (status === 'failed') return { main: strings.failMain, sub: String(payload?.error ?? ''), action: strings.retry };
+  return { main: strings.inactiveMain, sub: strings.inactiveSub, action: strings.takeover };
+}
+
+/**
+ * Which face the wiring row's status dot wears, one per status.
+ *
+ * The dot is the row's only non-text mark and it carries one real bit of state:
+ * whether this plugin is on the compaction row. The face is returned rather than
+ * drawn so the stylesheet stays the single place that maps a state to a colour
+ * and a shape, and so the mapping is checkable without a browser.
+ *
+ * Three faces, because the dot answers one question: is it in effect. `on` is a
+ * filled primary ring (in effect), `error` is a filled error ring (the takeover
+ * failed), `busy` is an open ring with the breathing halo (a write is in flight).
+ * Everything else — not yet in effect, unreadable, waiting on a restart, another
+ * package's slot — is the open ring: the sentence beside it names the reason, and
+ * a dot that claimed more than the sentence could be wrong.
+ *
+ * @param status - one of the nine statuses, or `'loading'`.
+ * @returns `busy`, `on`, `error`, or `off`.
+ */
+export function wireFace(status) {
+  if (status === 'taking') return 'busy';
+  if (status === 'active') return 'on';
+  if (status === 'failed') return 'error';
+  return 'off';
+}
+
+/**
+ * One `MM-DD HH:mm` local rendering of a stamp's ISO time.
+ *
+ * `clockText` alone would print a time of day with no date, and the stamp is a
+ * moment that can be days old — the one thing a reader of "wired since" needs is
+ * which day. The year is dropped: the stamp is a moment in the recent past, and
+ * the minutes alone are what a reader compares against "now". An unparseable or
+ * absent stamp renders as an empty string rather than `NaN:NaN`.
+ *
+ * @param iso - the stamp's `copiedAt` value.
+ * @returns the local timestamp, or `''`.
+ */
+export function stampText(iso) {
+  if (typeof iso !== 'string' || iso.length === 0) return '';
+  const ms = Date.parse(iso);
+  if (Number.isFinite(ms) === false) return '';
+  const at = new Date(ms);
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
+
 /** Canonical text for one settings value: object keys sorted, at every level. */
 function settingsShape(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';

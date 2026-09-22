@@ -23,16 +23,26 @@ export { deriveSegments, deriveTurnStart, segmentForSeq, loadSegments, ownHistor
 export { renderTranscript, renderWindow, renderEvent, locateAround,
   snapWindow, excerptAround, eventBody } from '../src/transcript.ts';
 export { NoteStore, trimToLimit } from '../src/notes.ts';
-export { buildSummarizationInstruction, createContextZipEngine, setSharedModeReader, summarizeTarget, setSharedFallbackReader, resetFailureStreaks, failureCount, isRangeTooSmallFailure, buildMechanicalSummary, messageVisibleText as packageMessageVisibleText } from 'dsh-context-zip-engine';
-export { SUMMARY_HARD_CAP_TOKENS, SUMMARY_SOFT_TARGET_TOKENS, NOTES_MAX_CHARS  , SUMMARY_HEADINGS } from 'dsh-context-zip-engine/prompt';
-export { buildRewriteInstruction } from 'dsh-context-zip-engine/prompt';
-export { setSharedRewriteReader, lowestReasoningEffort, addedClaims, resolveRewriteRoute, runRewriteCall } from 'dsh-context-zip-engine';
+export { buildSummarizationInstruction, createContextZipEngine, setSharedModeReader, summarizeTarget, setSharedFallbackReader, resetFailureStreaks, failureCount, isRangeTooSmallFailure, buildMechanicalSummary, messageVisibleText as packageMessageVisibleText } from 'dsh-context-zip/engine';
+export { SUMMARY_HARD_CAP_TOKENS, SUMMARY_SOFT_TARGET_TOKENS, NOTES_MAX_CHARS  , SUMMARY_HEADINGS } from 'dsh-context-zip/engine/prompt';
+export { buildRewriteInstruction } from 'dsh-context-zip/engine/prompt';
+export { setSharedRewriteReader, lowestReasoningEffort, addedClaims, resolveRewriteRoute, runRewriteCall } from 'dsh-context-zip/engine';
 export { PROBE_MAX_TOKENS, probeModel, readModelCatalog, requireRegisteredProvider } from '../src/models.ts';
 export { SETTINGS_NS, applySettingsPatch } from '../src/index.ts';
 export { registerRoutes } from '../src/routes.ts';
+export {
+  REDIRECT_PACKAGE,
+  REDIRECT_MARKER,
+  STAMP_FILE,
+  assertPathInsideProfile,
+  basePackageDir,
+  readWireStatus,
+  resolveProfileDirectory,
+  wireCompactionRow,
+} from '../src/wire.ts';
 export { createTitleMemo, TITLE_TTL_MS } from '../src/session-titles.ts';
 export { SESSION_KEY, isSessionKey } from '../src/session-key.ts';
-export { LIVE_POLL_MS, LIVE_DEDUPE_MS, MODE_DEDUPE_MS, MODE_RETRY_SCHEDULE_MS, clockText, initialLiveHealth, liveHealthAfter, liveReadDue, mergeLivePayload, modeClickIntent, modeRetryDelay, rowsAfterSave, startLivePoll, startModeReadRetry, titlesFrom, toRows, SAVE_FEEDBACK_MS, sameSettings, saveButtonEnabled, saveButtonFace } from '../client/live.ts';
+export { LIVE_POLL_MS, LIVE_DEDUPE_MS, MODE_DEDUPE_MS, MODE_RETRY_SCHEDULE_MS, clockText, initialLiveHealth, liveHealthAfter, liveReadDue, mergeLivePayload, modeClickIntent, modeRetryDelay, rowsAfterSave, startLivePoll, startModeReadRetry, titlesFrom, toRows, SAVE_FEEDBACK_MS, sameSettings, saveButtonEnabled, saveButtonFace, stampText, wireFace, wireStatusFrom, wireText } from '../client/live.ts';
 export {
   ManualTargetError,
   selectManualRange,

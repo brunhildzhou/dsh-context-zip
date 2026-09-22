@@ -160,6 +160,64 @@ function sameTitleMap(left, right) {
   return keys.every((key) => a[key] === b[key]);
 }
 var SAVE_FEEDBACK_MS = 1500;
+function wireStatusFrom(payload, action) {
+  if (payload === null || payload === void 0 || payload.ok !== true) return "unknown";
+  if (payload.foreign === true) return "taken";
+  if (payload.wired !== true) return payload.partial === true ? "incomplete" : "inactive";
+  if (action === "taking") return "taking";
+  if (action === "failed") return "failed";
+  if (payload.stale === true) return "update";
+  if (redirectIsNewerThanProcess(payload)) return "restart";
+  return "active";
+}
+function redirectIsNewerThanProcess(payload) {
+  const copiedAt = payload?.copiedAt;
+  const processStartedAt = payload?.processStartedAt;
+  if (typeof copiedAt !== "string" || copiedAt.length === 0) return false;
+  if (typeof processStartedAt !== "string" || processStartedAt.length === 0) return false;
+  const copied = Date.parse(copiedAt);
+  const started = Date.parse(processStartedAt);
+  if (Number.isFinite(copied) === false || Number.isFinite(started) === false) return false;
+  return copied > started;
+}
+function wireText(status, payload, strings, locale = "zh") {
+  const stampVersion = typeof payload?.version === "string" && payload.version.length > 0 ? payload.version : "";
+  const version = stampVersion.length > 0 ? stampVersion : strings.versionUnknown;
+  const current = typeof payload?.current === "string" ? payload.current : "";
+  const at = stampText(payload?.copiedAt);
+  const sep = locale === "en" ? ", " : "\uFF0C";
+  if (status === "loading") return { main: strings.loading, sub: "", action: "" };
+  if (status === "taking") return { main: strings.takingMain, sub: strings.takingSub, action: strings.takeover };
+  if (status === "active") {
+    const sub = at.length > 0 ? `${strings.activeSubPrefix} ${version}${sep}${at}` : `${strings.activeSubPrefix} ${version}`;
+    return { main: strings.activeMain, sub, action: "" };
+  }
+  if (status === "update") {
+    return { main: strings.updateMain, sub: strings.updateTpl(current, version), action: strings.reconnect };
+  }
+  if (status === "restart") return { main: strings.restartMain, sub: strings.restartSub, action: "" };
+  if (status === "taken") return { main: strings.inactiveMain, sub: strings.takenSub, action: "" };
+  if (status === "incomplete") {
+    return { main: strings.incompleteMain, sub: strings.incompleteSub, action: strings.retry };
+  }
+  if (status === "unknown") return { main: strings.unknownMain, sub: strings.unknownSub, action: strings.retry };
+  if (status === "failed") return { main: strings.failMain, sub: String(payload?.error ?? ""), action: strings.retry };
+  return { main: strings.inactiveMain, sub: strings.inactiveSub, action: strings.takeover };
+}
+function wireFace(status) {
+  if (status === "taking") return "busy";
+  if (status === "active") return "on";
+  if (status === "failed") return "error";
+  return "off";
+}
+function stampText(iso) {
+  if (typeof iso !== "string" || iso.length === 0) return "";
+  const ms = Date.parse(iso);
+  if (Number.isFinite(ms) === false) return "";
+  const at = new Date(ms);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
 function settingsShape(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(settingsShape).join(",")}]`;
@@ -232,6 +290,7 @@ var UPDATE_ROUTE = "/dsh-context-zip/settings/update";
 var SEGMENTS_ROUTE = "/dsh-context-zip/segments";
 var MODE_ROUTE = "/dsh-context-zip/mode";
 var MODELS_ROUTE = "/dsh-context-zip/models";
+var WIRE_ROUTE = "/dsh-context-zip/wire";
 var MODE_MEMORY_KEY = "dsh-context-zip:modes";
 function readModeMemory() {
   try {
@@ -272,6 +331,37 @@ var ZH = {
   methodLabel: "\u65B0\u5EFA\u4F1A\u8BDD\u9ED8\u8BA4\u538B\u7F29\u65B9\u5F0F",
   methodPlugin: "ContextZip",
   methodDefault: "\u5185\u7F6E\u540E\u7AEF",
+  // ── 压缩后端：压缩那一行由谁接管（`dsh plugin add` 装的人默认没有接管）。
+  // 一行标题加一颗问号，中间是主行加副行，右端按钮只在还能做事时出现。九态各有一套
+  // 主副行，判定顺序在 `client/live.ts` 的 `wireStatusFrom`；这里只有文字。
+  rowTitle: "\u538B\u7F29\u540E\u7AEF",
+  help: "\u63D2\u4EF6\u63A5\u7BA1\u538B\u7F29\u540E\u624D\u751F\u6548\uFF0C\u63A5\u7BA1\u540E\u9700\u91CD\u542F\u4E00\u6B21 harness\u3002",
+  inactiveMain: "\u672A\u751F\u6548",
+  inactiveSub: "\u5185\u7F6E\u538B\u7F29\u6B63\u5728\u5DE5\u4F5C",
+  takeover: "\u63A5\u7BA1",
+  takingMain: "\u6B63\u5728\u63A5\u7BA1",
+  takingSub: "\u8BF7\u7A0D\u5019",
+  activeMain: "\u5DF2\u751F\u6548",
+  activeSubPrefix: "\u57FA\u4E8E\u5185\u7F6E",
+  // 戳里没有版本时的兜底句：副行要印版本，缺字段就用这一句，不留空位。
+  versionUnknown: "\u7248\u672C\u672A\u77E5",
+  updateMain: "\u5F85\u66F4\u65B0",
+  // 两个版本都可能缺席：快照由 `wireText` 兜成「版本未知」，当前版本没有兜底句，所以这里
+  // 把空的那一段连同它的分隔符一起去掉，而不是印出 `内置 ，快照 …` 或尾随的逗号。
+  updateTpl: (current, snapshot) => {
+    const parts = [current.length > 0 ? `\u5185\u7F6E ${current}` : "", snapshot.length > 0 ? `\u5FEB\u7167 ${snapshot}` : "", "\u91CD\u63A5\u4E00\u6B21\u5373\u53EF"];
+    return parts.filter((part) => part.length > 0).join("\uFF0C");
+  },
+  reconnect: "\u91CD\u65B0\u63A5\u7BA1",
+  restartMain: "\u7B49\u5F85\u91CD\u542F",
+  restartSub: "\u4E0B\u6B21\u542F\u52A8\u65F6\u751F\u6548",
+  takenSub: "\u8BE5\u4F4D\u7F6E\u5DF2\u6709\u5176\u4ED6\u5B9E\u73B0\uFF0C\u4FDD\u6301\u4E0D\u52A8",
+  incompleteMain: "\u63A5\u7BA1\u4E0D\u5B8C\u6574",
+  incompleteSub: "\u91CD\u8BD5\u4E00\u6B21\u5373\u53EF\u6062\u590D",
+  unknownMain: "\u72B6\u6001\u672A\u77E5",
+  unknownSub: "\u521A\u624D\u6CA1\u6709\u8BFB\u5230",
+  failMain: "\u63A5\u7BA1\u5931\u8D25",
+  retry: "\u91CD\u8BD5",
   // ── 已生效会话（只读）
   agentsSection: "\u5DF2\u751F\u6548\u4F1A\u8BDD",
   showMore: "\u663E\u793A\u66F4\u591A",
@@ -350,6 +440,38 @@ var EN = {
   methodLabel: "Compaction method for new sessions",
   methodPlugin: "ContextZip",
   methodDefault: "Shipped backend",
+  // Compaction backend: who took over the compaction row. One title with its
+  // question mark, a main line and a sub line in the middle, and a button on the
+  // right only while there is still something to do.
+  rowTitle: "Compaction",
+  help: "Takeover is required for this plugin to work. Restart once after takeover.",
+  inactiveMain: "Inactive",
+  inactiveSub: "Built-in compaction is active",
+  takeover: "Take over",
+  takingMain: "Taking over",
+  takingSub: "One moment",
+  activeMain: "Active",
+  activeSubPrefix: "Based on built-in",
+  // Fallback for a stamp that carries no version: the sub line must print one,
+  // and an empty slot is not a version.
+  versionUnknown: "version unknown",
+  updateMain: "Update available",
+  // Same guard as the Chinese table: a part that is not there is dropped with its
+  // separator, so the line can never read `Built-in , snapshot …`.
+  updateTpl: (current, snapshot) => {
+    const parts = [current.length > 0 ? `Built-in ${current}` : "", snapshot.length > 0 ? `snapshot ${snapshot}` : "", "reconnect to follow"];
+    return parts.filter((part) => part.length > 0).join(", ");
+  },
+  reconnect: "Reconnect",
+  restartMain: "Restart required",
+  restartSub: "Takes effect on next launch",
+  takenSub: "That slot is already taken, left untouched",
+  incompleteMain: "Incomplete",
+  incompleteSub: "One retry restores it",
+  unknownMain: "Unknown",
+  unknownSub: "Could not read the status",
+  failMain: "Could not take over",
+  retry: "Retry",
   agentsSection: "Sessions in effect",
   showMore: "Show more",
   emptyList: "None",
@@ -416,6 +538,7 @@ var ICON_CHEVRON = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" 
 function ContextZipSection(props) {
   const { close, ctx } = props ?? {};
   const strings = useStrings();
+  const locale = React.useContext(LocaleContext);
   const [state, setState] = React.useState({
     status: "loading",
     value: null,
@@ -428,6 +551,8 @@ function ContextZipSection(props) {
   const [segments, setSegments] = React.useState(null);
   const [catalog, setCatalog] = React.useState({ status: "idle", providers: [], failures: [] });
   const [liveHealth, setLiveHealth] = React.useState(() => initialLiveHealth(Date.now()));
+  const [wire, setWire] = React.useState(null);
+  const [wireAction, setWireAction] = React.useState(null);
   const [agentsLimit, setAgentsLimit] = React.useState(LIST_PAGE);
   const [retrievalLimit, setRetrievalLimit] = React.useState(LIST_PAGE);
   const [experimentOpen, setExperimentOpen] = React.useState(false);
@@ -436,6 +561,7 @@ function ContextZipSection(props) {
   const [tip, setTip] = React.useState(null);
   const bubbleRef = React.useRef(null);
   const tipRef = React.useRef(null);
+  const helpWireRef = React.useRef(null);
   const helpFallbackRef = React.useRef(null);
   const helpRewriteRef = React.useRef(null);
   const tipTimer = React.useRef(null);
@@ -495,6 +621,39 @@ function ContextZipSection(props) {
       cancelled = true;
     };
   }, []);
+  const readWire = React.useCallback(async () => {
+    try {
+      const data = await fetch(WIRE_ROUTE).then((response) => response.json());
+      setWire(data);
+    } catch (error) {
+      setWire({ ok: false, error: String(error?.message ?? error) });
+    }
+  }, []);
+  React.useEffect(() => {
+    void readWire();
+  }, [readWire]);
+  const wireRow = React.useCallback(async () => {
+    setWireAction("taking");
+    setWire((current) => ({ ...current ?? {}, ok: true, wired: true, foreign: false, partial: false }));
+    try {
+      const response = await fetch(WIRE_ROUTE, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({})
+      });
+      const data = await response.json();
+      if (data?.ok === true && data.wired === true) {
+        setWire(data);
+        setWireAction(null);
+        return;
+      }
+      setWire((current) => ({ ...current ?? {}, ok: true, wired: true, error: String(data?.error ?? "unavailable") }));
+      setWireAction("failed");
+    } catch (error) {
+      setWire((current) => ({ ...current ?? {}, ok: true, wired: true, error: String(error?.message ?? error) }));
+      setWireAction("failed");
+    }
+  }, []);
   const loadCatalog = React.useCallback(async () => {
     setCatalog((current) => ({ ...current, status: "loading" }));
     try {
@@ -507,7 +666,7 @@ function ContextZipSection(props) {
   }, []);
   React.useEffect(() => {
     if (help === null) return void 0;
-    const anchor = help === "fallback" ? helpFallbackRef.current : helpRewriteRef.current;
+    const anchor = help === "fallback" ? helpFallbackRef.current : help === "rewrite" ? helpRewriteRef.current : helpWireRef.current;
     const bubble = bubbleRef.current;
     if (anchor === null || bubble === null) return void 0;
     const place = () => {
@@ -812,6 +971,59 @@ function ContextZipSection(props) {
       )
     )
   );
+  const renderWireRow = () => {
+    const status = wire === null ? "loading" : wireStatusFrom(wire, wireAction);
+    const face = wireFace(status);
+    const copy = wireText(status, wire, strings, locale);
+    const busyNow = status === "taking";
+    const click = status === "unknown" ? () => void readWire() : () => void wireRow();
+    return React.createElement(
+      "div",
+      { className: "dsh-context-zip__wire", "data-status": status, "data-face": face, "aria-busy": busyNow ? "true" : "false" },
+      React.createElement(
+        "span",
+        { className: "dsh-context-zip__wire-title" },
+        React.createElement("span", { className: "dsh-context-zip__row-label" }, strings.rowTitle),
+        React.createElement(
+          "button",
+          {
+            type: "button",
+            className: "dsh-context-zip__help",
+            ref: helpWireRef,
+            "aria-label": strings.help,
+            "aria-expanded": help === "wire" ? "true" : "false",
+            "aria-describedby": "dsh-context-zip-help-wire",
+            onClick: (event) => {
+              event.stopPropagation();
+              setHelp((open) => open === "wire" ? null : "wire");
+            }
+          },
+          React.createElement("span", { dangerouslySetInnerHTML: { __html: ICON_HELP } })
+        )
+      ),
+      React.createElement(
+        "span",
+        { className: "dsh-context-zip__wire-body", role: "status", "aria-live": "polite" },
+        React.createElement(
+          "span",
+          { className: "dsh-context-zip__wire-main" },
+          React.createElement("span", { className: "dsh-context-zip__wire-dot", "data-face": face, "aria-hidden": "true" }),
+          React.createElement("span", { className: "dsh-context-zip__wire-main-text" }, copy.main)
+        ),
+        React.createElement("span", { className: "dsh-context-zip__wire-sub" }, copy.sub)
+      ),
+      copy.action === "" ? null : React.createElement(
+        "button",
+        {
+          type: "button",
+          className: "dsh-context-zip__btn dsh-context-zip__btn--outline dsh-context-zip__wire-btn",
+          disabled: busyNow,
+          onClick: click
+        },
+        copy.action
+      )
+    );
+  };
   const saveButton = () => {
     const label = saveFace === "saving" ? strings.saving : saveFace === "failed" ? strings.saveFailed : strings.saveAction;
     const props2 = {
@@ -906,6 +1118,10 @@ function ContextZipSection(props) {
         React.createElement(
           "div",
           { className: "dsh-context-zip__rows" },
+          // 压缩后端那一行是这一组的第一行，排在「新建会话默认压缩方式」上面：先回答
+          // 「压缩那一行被本插件接管了没有」，再回答「选谁压」。`dsh plugin add` 装出来的
+          // profile 正好是「选得了、没接管」，把它放下面会让只扫第一行的人以为已经生效。
+          renderWireRow(),
           renderSegRow(
             "dsh-context-zip-method",
             strings.methodLabel,
@@ -1144,7 +1360,7 @@ function ContextZipSection(props) {
         key: "bubble",
         "data-show": help === null ? "false" : "true"
       },
-      help === null ? "" : help === "fallback" ? strings.fallbackHint : strings.rewriteHint
+      help === null ? "" : help === "fallback" ? strings.fallbackHint : help === "rewrite" ? strings.rewriteHint : strings.help
     ),
     React.createElement(
       "div",
@@ -1157,6 +1373,7 @@ function ContextZipSection(props) {
       },
       tip === null ? "" : tip.text
     ),
+    React.createElement("div", { id: "dsh-context-zip-help-wire", key: "help-wire", hidden: true }, strings.help),
     React.createElement("div", { id: "dsh-context-zip-help-fallback", key: "help-fallback", hidden: true }, strings.fallbackHint),
     React.createElement("div", { id: "dsh-context-zip-help-rewrite", key: "help-rewrite", hidden: true }, strings.rewriteHint)
   );
@@ -1330,7 +1547,7 @@ var STYLE = `
   --cz-font-sm:12px;--cz-font-md:14px;--cz-font-lg:16px;
   --cz-line-sm:18px;--cz-line-md:22px;--cz-line-lg:24px;
   --cz-radius-control:8px;--cz-radius-surface:10px;--cz-radius-group:12px;
-  --cz-row-h:40px;--cz-hit:28px;--cz-save-w:104px;
+  --cz-row-h:40px;--cz-hit:28px;--cz-save-w:104px;--cz-pulse:1200ms;
   --cz-gap-xs:4px;--cz-gap-sm:8px;--cz-gap-md:12px;--cz-gap-lg:20px;
   --cz-z-bubble:30;--cz-z-tip:40;
   --cz-font-code:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
@@ -1418,6 +1635,30 @@ var STYLE = `
 .dsh-context-zip__btn--flush{margin-left:-12px}
 .dsh-context-zip__btn[hidden]{display:none}
 .dsh-context-zip__more{padding-top:var(--cz-gap-sm)}
+
+/* \u300C\u538B\u7F29\u540E\u7AEF\u300D\u884C\uFF1A\u5DE6\u6807\u9898\uFF08\u542B\u95EE\u53F7\uFF09\u3001\u4E2D\u4E3B\u526F\u884C\u3001\u53F3\u6309\u94AE\uFF0C\u662F\u300C\u538B\u7F29\u65B9\u5F0F\u300D\u7EC4\u7684\u7B2C\u4E00\u884C\u3002\u4E24\u6761\u6280\u80FD\u5305
+   \u89C4\u5219\u843D\u5728\u8FD9\u4E00\u5757\uFF1A\u72B6\u6001\u70B9\u53EA\u753B\u771F\u5B9E\u7684\u8BED\u4E49\u72B6\u6001\uFF08\u672C\u63D2\u4EF6\u6709\u6CA1\u6709\u63A5\u7BA1\u538B\u7F29\u90A3\u4E00\u884C\uFF09\uFF0C\u4E0D\u505A\u88C5\u9970\uFF0C\u5168\u9762\u677F
+   \u53EA\u6B64\u4E00\u9897\uFF08taste-skill \u7684 SKILL.md:683\uFF09\uFF1B\u52A8\u753B\u53EA\u4E3A\u300C\u6709\u52A8\u4F5C\u5728\u8FDB\u884C\u300D\u800C\u5B58\u5728\uFF08\u540C\u6587\u4EF6 :360\uFF09\u3002
+   \u5F62\u72B6\u4E0E\u989C\u8272\u5206\u5DE5\uFF0C\u8272\u76F2\u7528\u6237\u4E5F\u80FD\u8BFB\uFF1A\u7A7A\u5FC3=\u672A\u751F\u6548\u4E0E\u52A0\u8F7D\u3001\u5B9E\u5FC3=\u5DF2\u751F\u6548\u3001\u5931\u8D25=\u5B9E\u5FC3\u52A0\u9519\u8BEF\u8272\u3001
+   \u63A5\u7BA1\u4E2D=\u7A7A\u5FC3\u52A0\u4E00\u5708\u547C\u5438\u73AF\u3002\u70B9\u5BF9\u8BFB\u5C4F\u5668\u65E0\u610F\u4E49\uFF08\u72B6\u6001\u5728\u53E5\u5B50\u91CC\uFF09\uFF0C\u52A0 aria-hidden\u3002
+   \u4E09\u6837\u6A2A\u6392\uFF1A\u6807\u9898\u4E0D\u4F38\u7F29\uFF0C\u4E3B\u526F\u884C\u5360\u6EE1\u4E2D\u95F4\uFF0C\u6309\u94AE\u8D34\u6700\u53F3\uFF1B\u884C\u9AD8\u53D6 --cz-row-h\uFF0C\u4E3B\u884C 22px \u52A0\u526F\u884C
+   18px \u6B63\u597D\u586B\u6EE1\uFF0C\u6240\u4EE5\u6709\u6309\u94AE\u4E0E\u6CA1\u6309\u94AE\u7684\u6001\u4E00\u6837\u9AD8\u3002\u6309\u94AE\u4E0E\u8BE5\u7EC4\u5206\u6BB5\u63A7\u4EF6\u90FD\u662F\u6240\u5728\u884C\u7684\u6700\u540E\u4E00\u4E2A
+   \u4F38\u7F29\u9879\u3001\u884C\u5BBD\u76F8\u540C\uFF0C\u53F3\u7F18\u56E0\u6B64\u5BF9\u9F50\uFF0C\u4E0D\u989D\u5916\u5B9A\u4F4D\u3002 */
+.dsh-context-zip__wire{display:flex;align-items:center;gap:16px;min-height:var(--cz-row-h)}
+.dsh-context-zip__wire-title{flex:none;display:flex;align-items:center;gap:var(--cz-gap-sm)}
+.dsh-context-zip__wire-body{flex:1;min-width:0;display:flex;flex-direction:column}
+.dsh-context-zip__wire-main{display:flex;align-items:center;gap:var(--cz-gap-sm);font-size:var(--cz-font-md);line-height:var(--cz-line-md);color:var(--dsw-alias-label-primary)}
+.dsh-context-zip__wire-main-text{min-width:0}
+.dsh-context-zip__wire-sub{padding-left:16px;font-size:var(--cz-font-sm);line-height:var(--cz-line-sm);color:var(--dsw-alias-label-secondary);text-wrap:pretty}
+.dsh-context-zip__wire-dot{position:relative;flex:none;width:8px;height:8px;border-radius:50%;border:1.5px solid var(--dsw-alias-label-tertiary);background:transparent;transition:background-color var(--cz-dur) var(--cz-ease),border-color var(--cz-dur) var(--cz-ease)}
+.dsh-context-zip__wire-dot[data-face="on"]{background:var(--dsw-alias-button-primary-fill);border-color:var(--dsw-alias-button-primary-fill)}
+.dsh-context-zip__wire-dot[data-face="busy"]{border-color:var(--dsw-alias-button-primary-fill)}
+.dsh-context-zip__wire-dot[data-face="error"]{background:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}
+.dsh-context-zip__wire-dot[data-face="busy"]::after{content:"";position:absolute;inset:-1.5px;border-radius:50%;border:1.5px solid var(--dsw-alias-button-primary-fill);transform:scale(1);opacity:.5;animation:cz-wire-pulse var(--cz-pulse) var(--cz-ease) infinite}
+@keyframes cz-wire-pulse{0%{transform:scale(1);opacity:.5}70%,100%{transform:scale(1.9);opacity:0}}
+.dsh-context-zip__wire-btn{flex:none}
+/* \u63A5\u7BA1\u5728\u98DE\u65F6\u90A3\u9897\u6309\u94AE\u7981\u7528\u7F6E\u7070\uFF1A:hover \u5BF9\u7981\u7528\u6309\u94AE\u7167\u6837\u547D\u4E2D\uFF0C\u6240\u4EE5\u8FDE\u540C\u60AC\u505C\u80CC\u666F\u4E00\u8D77\u6309\u6389\u3002 */
+.dsh-context-zip__wire-btn:disabled,.dsh-context-zip__wire-btn:disabled:hover{opacity:.55;cursor:default;background:none}
 
 /* \u53EA\u8BFB\u4F1A\u8BDD\u884C\uFF08\u5DF2\u751F\u6548\u4F1A\u8BDD\u4E0E\u68C0\u7D22\u8986\u76D6\u5171\u7528\u540C\u4E00\u5957\uFF1B\u884C\u95F4\u4E0D\u753B\u7EBF\uFF09 */
 .dsh-context-zip__list{display:flex;flex-direction:column}

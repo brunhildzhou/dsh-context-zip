@@ -109,7 +109,7 @@ The per-session override table is read-only in the panel: the only ways to write
 
 ## Verifying it yourself
 
-The plugin ships a runtime check suite. It currently contains 1130 checks. The suite checks the build output, so it has to be pointed at an installed copy. The full description is in `evidence/套件说明.md`; the shortest path is:
+The plugin ships a runtime check suite. It currently contains 1262 checks. The suite checks the build output, so it has to be pointed at an installed copy. The full description is in `evidence/套件说明.md`; the shortest path is:
 
 ```bash
 node build.mjs

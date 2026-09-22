@@ -11,8 +11,9 @@
  * ring of `npm run check` reports eighteen errors — ten `TS2307`, one `TS2664`
  * and five derived `TS2339` — that say nothing at all about this code.
  *
- * The fix is the one `build.mjs` already uses for the engine package: plant a
- * link in `node_modules` before the tool that needs it runs. The links point
+ * The fix has the same shape as the link `build.mjs` used to plant for the engine
+ * package while that package still lived beside this one: plant a link in
+ * `node_modules` before the tool that needs it runs. The links point
  * INTO the harness repository's own pnpm store rather than at the registry, so
  * nothing is downloaded, the version is the one the running harness actually
  * resolved, and the whole thing is undone by deleting the links again. The

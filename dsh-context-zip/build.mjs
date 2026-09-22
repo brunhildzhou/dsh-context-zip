@@ -35,7 +35,6 @@ const here = dirname(fileURLToPath(import.meta.url));
  * so the local build sees it through a link in this directory. A composed
  * profile resolves the real package instead.
  */
-const ENGINE_LINK = join(here, 'node_modules', 'dsh-context-zip-engine');
 
 /** Load esbuild from the project, then from any cached copy. */
 async function loadEsbuild() {
@@ -58,16 +57,14 @@ async function loadEsbuild() {
 const { build } = await loadEsbuild();
 
 await mkdir(join(here, 'node_modules'), { recursive: true });
-await rm(ENGINE_LINK, { recursive: true, force: true });
-await symlink(join(here, 'engine'), ENGINE_LINK, 'dir');
 
 /**
- * The engine package is a sibling in this repository rather than an installed
- * dependency, so the local build reaches it through the
- * `node_modules/dsh-context-zip-engine` link that {@link main} plants before
- * bundling. It must never be inlined; see {@link SHARED}.
+ * The engine lives inside this package, but every importer reaches it through
+ * the package's own `./engine` subpath: the built plugin uses that specifier and
+ * so does the profile-local redirect, so both resolve to one and the same file.
+ * It must never be inlined; see {@link SHARED}.
  */
-const ENGINE_SPECIFIERS = ['dsh-context-zip-engine', 'dsh-context-zip-engine/prompt'];
+const ENGINE_SPECIFIERS = ['dsh-context-zip/engine', 'dsh-context-zip/engine/prompt'];
 
 /**
  * Shared esbuild settings.
@@ -88,12 +85,6 @@ const SHARED = {
   resolveExtensions: ['.ts', '.tsx', '.js', '.mjs', '.json'],
   external: ['@deepseek-ai/*', ...ENGINE_SPECIFIERS],
 };
-
-/**
- * The engine package is a sibling in this repository, linked at
- * `node_modules/dsh-context-zip-engine` while the plugin is built. The composed
- * profile resolves the real installed package instead.
- */
 
 /** Packages the browser loader already provides to every client bundle. */
 const CLIENT_EXTERNALS = [
@@ -147,13 +138,13 @@ const CLIENT_FOOTER = `    return module.exports;
  * manifest promises a declaration this tree cannot produce.
  *
  * The engine runs FIRST, and its declarations are an input rather than a
- * deliverable. `src/` reaches the engine through the `dsh-context-zip-engine`
+ * deliverable. `src/` reaches the engine through the `dsh-context-zip/engine`
  * alias `tsconfig.json` points at `engine/index.ts`, and a `.ts` input outside
  * `rootDir` is `TS6059`: the host pass cannot have `rootDir: "src"` while an
  * engine source file is in its program. Pointing that alias at the engine's own
  * emitted declarations instead keeps the engine out of the host program, costs
- * no accuracy, and matches how the package is actually consumed — the runtime
- * imports the engine by name too.
+ * no accuracy, and matches how the engine is actually consumed — the runtime
+ * imports it through the package's own subpath too.
  *
  * tsc reports every type error it knows about during these passes too. That is
  * not what this step is for and it must not fail the build twice for one

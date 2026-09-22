@@ -1,4 +1,6 @@
 // src/index.ts
+import { dirname as dirname3 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 import { createUserMessage as createUserMessage2 } from "@deepseek-ai/dsh-llm";
 import z from "@deepseek-ai/schemastery";
 import {
@@ -7,7 +9,7 @@ import {
   setSharedNotesReader,
   setSharedRewriteReader,
   runManualCompaction
-} from "dsh-context-zip-engine";
+} from "dsh-context-zip/engine";
 
 // src/models.ts
 import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
@@ -87,7 +89,7 @@ import { Service } from "@deepseek-ai/cordis";
 import { Session } from "@deepseek-ai/dsh-session";
 
 // src/segments.ts
-import { SEQ_LIST_HEAD, SEQ_LIST_TAIL } from "dsh-context-zip-engine/prompt";
+import { SEQ_LIST_HEAD, SEQ_LIST_TAIL } from "dsh-context-zip/engine/prompt";
 async function readSessionEvents(ctx, session) {
   try {
     const own = session.snapshotEvents();
@@ -213,7 +215,7 @@ function latestContextWindow(events) {
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
-import { NOTES_MAX_CHARS } from "dsh-context-zip-engine/prompt";
+import { NOTES_MAX_CHARS } from "dsh-context-zip/engine/prompt";
 function contextZipRoot() {
   return dshHomePath("context-zip");
 }
@@ -362,7 +364,7 @@ async function atomicWrite(path, content) {
 }
 
 // src/transcript.ts
-import { EVENT_TEXT_CHARS, HISTORY_READ_MAX_CHARS, SEQ_LIST_HEAD as SEQ_LIST_HEAD2, SEQ_LIST_TAIL as SEQ_LIST_TAIL2 } from "dsh-context-zip-engine/prompt";
+import { EVENT_TEXT_CHARS, HISTORY_READ_MAX_CHARS, SEQ_LIST_HEAD as SEQ_LIST_HEAD2, SEQ_LIST_TAIL as SEQ_LIST_TAIL2 } from "dsh-context-zip/engine/prompt";
 function renderEvent(event) {
   const data = event?.data ?? {};
   const head = `#${event.seq} ${event.type}`;
@@ -866,7 +868,7 @@ ${paths.join("\n")}` };
 
 // src/manual.ts
 import { toolPairingBalancedBefore } from "@deepseek-ai/dsh-compaction";
-import { failureCount, isRangeTooSmallFailure } from "dsh-context-zip-engine";
+import { failureCount, isRangeTooSmallFailure } from "dsh-context-zip/engine";
 var ManualTargetError = class extends Error {
   /** Stable reason code, so the browser half can localize it. */
   code;
@@ -1030,7 +1032,7 @@ import {
   REMINDER_THRESHOLD_PERCENT,
   SUMMARY_HARD_CAP_TOKENS,
   SUMMARY_SOFT_TARGET_TOKENS
-} from "dsh-context-zip-engine/prompt";
+} from "dsh-context-zip/engine/prompt";
 
 // src/session-key.ts
 var SESSION_KEY = /^session-[A-Za-z0-9-]{1,120}$/;
@@ -1111,6 +1113,31 @@ function registerRoutes(ctx, options) {
           return respond(res, 200, { ok: true, value });
         } catch (error) {
           return respond(res, 400, { ok: false, error: String(error?.message ?? error) });
+        }
+      }
+    }),
+    webServer.register({
+      kind: "exact",
+      path: `${ROUTE_PREFIX}/wire`,
+      handler: async (req, res) => {
+        if (!isLoopback(req)) return respond(res, 403, { ok: false, error: "forbidden" });
+        if (req.method === "GET") {
+          try {
+            const status = await options.readWireStatus();
+            return respond(res, 200, { ok: true, ...status, processStartedAt: processStartedAtNow() });
+          } catch (error) {
+            return respond(res, 500, { ok: false, error: String(error?.message ?? error) });
+          }
+        }
+        if (req.method !== "POST") return respond(res, 405, { ok: false, error: "method-not-allowed" });
+        if (!String(req.headers["content-type"] ?? "").includes("application/json")) {
+          return respond(res, 415, { ok: false, error: "content-type-must-be-json" });
+        }
+        try {
+          const result = await options.wireRow();
+          return respond(res, 200, { ok: true, ...result, processStartedAt: processStartedAtNow() });
+        } catch (error) {
+          return respond(res, 500, { ok: false, error: String(error?.message ?? error), processStartedAt: processStartedAtNow() });
         }
       }
     }),
@@ -1245,12 +1272,15 @@ function readManualFailure(options, sessionId) {
     return null;
   }
 }
+function processStartedAtNow() {
+  return new Date(Date.now() - process.uptime() * 1e3).toISOString();
+}
 function isLoopback(req) {
   const address = req.socket?.remoteAddress ?? "";
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 function readJsonBody(req) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve2, reject) => {
     let data = "";
     req.on("data", (chunk) => {
       data += chunk;
@@ -1260,9 +1290,9 @@ function readJsonBody(req) {
       }
     });
     req.on("end", () => {
-      if (data.length === 0) return resolve({});
+      if (data.length === 0) return resolve2({});
       try {
-        resolve(JSON.parse(data));
+        resolve2(JSON.parse(data));
       } catch {
         reject(new Error("invalid JSON body"));
       }
@@ -1421,6 +1451,267 @@ function createTitleMemo(options) {
   return { titles, refresh, ttlMs };
 }
 
+// src/wire.ts
+import { cp, lstat, mkdir as mkdir3, readFile as readFile2, readdir as readdir2, realpath, rm as rm2, stat, writeFile as writeFile3 } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { basename, dirname as dirname2, join as join3, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { dshHomePath as dshHomePath2 } from "@deepseek-ai/dsh-home-paths";
+var REDIRECT_PACKAGE = "@deepseek-ai/dsh-compaction-basic";
+var REDIRECT_MARKER = "context-zip";
+var STAMP_FILE = "base.json";
+var PLUGIN_NAME = "dsh-context-zip";
+async function canonical(target) {
+  return realpath(target).catch(() => resolve(target));
+}
+function isInside(real, root) {
+  return real === root || real.startsWith(`${root}${sep}`);
+}
+async function flattenPath(target) {
+  const parts = [];
+  let probe = target;
+  for (; ; ) {
+    try {
+      return { flattened: join3(await realpath(probe), ...parts), anchor: probe, rest: parts };
+    } catch {
+      const parent = dirname2(probe);
+      if (parent === probe) return { flattened: target, anchor: probe, rest: [] };
+      parts.unshift(basename(probe));
+      probe = parent;
+    }
+  }
+}
+async function assertPathInsideProfile(target, label, profileReal) {
+  const absolute = resolve(target);
+  const { flattened, anchor, rest } = await flattenPath(absolute);
+  if (!isInside(flattened, profileReal)) {
+    throw new Error(
+      `${label} is ${absolute}, which resolves to ${flattened}, outside the profile ${profileReal}. This route writes through symlinks. Refusing before anything is written. Fix: make the affected directory a real directory and symlink each package inside it individually, instead of symlinking the directory as a whole.`
+    );
+  }
+  let current = anchor;
+  for (const segment of rest) {
+    const candidate = join3(current, segment);
+    let stats;
+    try {
+      stats = await lstat(candidate);
+    } catch {
+      break;
+    }
+    current = candidate;
+    if (stats.isSymbolicLink()) {
+      let resolved;
+      try {
+        resolved = await realpath(current);
+      } catch {
+        throw new Error(
+          `${label} is hidden behind the symlink ${current}, which points at nothing that exists. This route writes through symlinks, so it cannot tell where that would land. Refusing.`
+        );
+      }
+      if (!isInside(resolved, profileReal)) {
+        throw new Error(
+          `${label} is hidden behind the symlink ${current}, which resolves to ${resolved}, outside the profile ${profileReal}. This route writes through symlinks. Refusing before anything is written. Fix: make the directory that holds it a real directory and symlink each package inside that directory individually, instead of symlinking the directory as a whole.`
+        );
+      }
+    }
+  }
+  return flattened;
+}
+async function profileRejection(dir, pluginDir) {
+  const real = await canonical(dir);
+  const pluginReal = await canonical(pluginDir);
+  if (real === pluginReal) return "it is the directory this plugin itself lives in";
+  let manifest;
+  try {
+    manifest = JSON.parse(await readFile2(join3(dir, "package.json"), "utf8"));
+  } catch {
+    return "there is no readable package.json there";
+  }
+  if (manifest?.name === PLUGIN_NAME) return "its package.json names this plugin";
+  return null;
+}
+async function profileFromHome(pluginDir) {
+  const profiles = join3(dshHomePath2(), "profiles");
+  let names;
+  try {
+    names = await readdir2(profiles);
+  } catch {
+    return null;
+  }
+  const pluginReal = await canonical(pluginDir);
+  const matches = [];
+  for (const name2 of names) {
+    const dir = join3(profiles, name2);
+    let here;
+    try {
+      here = await realpath(join3(dir, "node_modules", PLUGIN_NAME));
+    } catch {
+      continue;
+    }
+    if (here !== pluginReal) continue;
+    if (await profileRejection(dir, pluginDir) !== null) continue;
+    matches.push(dir);
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+async function resolveProfileDirectory(baseUrl, pluginDir) {
+  const typed = typeof baseUrl === "string" && baseUrl.length > 0 ? toDirectory(baseUrl) : null;
+  if (typed !== null) {
+    const rejection = await profileRejection(typed, pluginDir);
+    if (rejection === null) return typed;
+    const fromHome2 = await profileFromHome(pluginDir);
+    if (fromHome2 !== null) return fromHome2;
+    throw new Error(
+      `the DSH context base URL is ${typed}, and that is not a profile: ${rejection}. No profile under ${join3(dshHomePath2(), "profiles")} holds this plugin either, so the profile cannot be named. Refusing to write: guessing a profile would put the redirect in somebody else's tree. Re-run \`node install.mjs --profile-dir <profile>\` instead.`
+    );
+  }
+  const fromHome = await profileFromHome(pluginDir);
+  if (fromHome !== null) return fromHome;
+  throw new Error(
+    `the DSH context carries no base URL, and no profile under ${join3(dshHomePath2(), "profiles")} holds this plugin, so the profile cannot be named. Refusing to write: guessing a profile would put the redirect in somebody else's tree. Re-run \`node install.mjs --profile-dir <profile>\` instead.`
+  );
+}
+function toDirectory(candidate) {
+  if (candidate.startsWith("file:")) {
+    try {
+      return fileURLToPath(candidate);
+    } catch {
+      return null;
+    }
+  }
+  return resolve(candidate);
+}
+async function resolveModulesRoot(profileDir, profileReal) {
+  const modules = resolve(join3(profileDir, "node_modules"));
+  const { flattened } = await flattenPath(modules);
+  if (!isInside(flattened, profileReal)) {
+    throw new Error(
+      `${modules} resolves to ${flattened}, which is outside the profile ${profileReal}. This route writes through symlinks. Refusing before anything is written. Fix: make node_modules a real directory and symlink each package inside it individually.`
+    );
+  }
+  if (flattened === profileReal) {
+    throw new Error(
+      `${modules} resolves to the profile directory itself (${profileReal}), not to a directory inside it. Refusing to write into the profile root.`
+    );
+  }
+  return flattened;
+}
+async function redirectTarget(profileDir, profileReal) {
+  const modulesRoot = await resolveModulesRoot(profileDir, profileReal);
+  const target = join3(modulesRoot, REDIRECT_PACKAGE);
+  return assertPathInsideProfile(target, "the redirect directory", profileReal);
+}
+async function redirectOccupant(redirectDir) {
+  let manifest;
+  try {
+    manifest = JSON.parse(await readFile2(join3(redirectDir, "package.json"), "utf8"));
+  } catch {
+    return "absent";
+  }
+  return String(manifest.version ?? "").includes(REDIRECT_MARKER) ? "ours" : "foreign";
+}
+async function readStamp(redirectDir) {
+  try {
+    const stamp = JSON.parse(await readFile2(join3(redirectDir, STAMP_FILE), "utf8"));
+    return stamp !== null && typeof stamp === "object" ? stamp : null;
+  } catch {
+    return null;
+  }
+}
+async function basePackageDir(profileDir) {
+  const require2 = createRequire(join3(profileDir, "package.json"));
+  for (const base of require2.resolve.paths(REDIRECT_PACKAGE) ?? []) {
+    const candidate = join3(base, REDIRECT_PACKAGE);
+    let manifest;
+    try {
+      manifest = JSON.parse(await readFile2(join3(candidate, "package.json"), "utf8"));
+    } catch {
+      continue;
+    }
+    if (String(manifest.version ?? "").includes(REDIRECT_MARKER)) continue;
+    return candidate;
+  }
+  throw new Error(`cannot locate a shipped ${REDIRECT_PACKAGE} from ${profileDir}`);
+}
+async function readWireStatus(options) {
+  const { baseUrl, pluginDir } = options ?? {};
+  const profileDir = await resolveProfileDirectory(baseUrl, pluginDir);
+  const profileReal = await canonical(profileDir);
+  const redirectDir = await redirectTarget(profileDir, profileReal);
+  const occupant = await redirectOccupant(redirectDir);
+  if (occupant !== "ours") {
+    return { wired: false, version: null, copiedAt: null, stale: false, foreign: occupant === "foreign" };
+  }
+  const stamp = await readStamp(redirectDir);
+  if (stamp === null) {
+    return { wired: false, version: null, copiedAt: null, stale: false, partial: true };
+  }
+  const version = typeof stamp.version === "string" ? stamp.version : null;
+  let stale = false;
+  let current = null;
+  try {
+    const shippedDir = await basePackageDir(profileDir);
+    const shipped = JSON.parse(await readFile2(join3(shippedDir, "package.json"), "utf8"));
+    current = String(shipped.version ?? "unknown");
+    stale = current !== version;
+  } catch {
+  }
+  return {
+    wired: true,
+    version,
+    current,
+    copiedAt: typeof stamp.copiedAt === "string" ? stamp.copiedAt : null,
+    stale,
+    foreign: false
+  };
+}
+async function wireCompactionRow(options) {
+  const { baseUrl, pluginDir } = options ?? {};
+  const profileDir = await resolveProfileDirectory(baseUrl, pluginDir);
+  const profileReal = await canonical(profileDir);
+  const redirectDir = await redirectTarget(profileDir, profileReal);
+  const occupant = await redirectOccupant(redirectDir);
+  if (occupant === "foreign") {
+    throw new Error(
+      `${redirectDir} holds a real ${REDIRECT_PACKAGE}, not this plugin's redirect: refusing to overwrite a package this plugin did not put there. Move that copy up to ${join3(dirname2(profileDir), "node_modules")} (the shared level, where the backend is expected) and press the button again.`
+    );
+  }
+  const baseDir = await basePackageDir(profileDir);
+  const baseManifest = JSON.parse(await readFile2(join3(baseDir, "package.json"), "utf8"));
+  if (String(baseManifest.version ?? "").includes(REDIRECT_MARKER)) {
+    throw new Error(
+      `${baseDir} is a previous redirect, not the shipped backend: remove ${redirectDir} and press the button again so the real package resolves.`
+    );
+  }
+  const baseEntry = join3(baseDir, baseManifest.exports?.["."]?.default ?? baseManifest.main);
+  const baseSource = await readFile2(baseEntry);
+  const version = String(baseManifest.version ?? "unknown");
+  const sourceDir = join3(pluginDir, "redirect");
+  const sourceIndex = join3(sourceDir, "index.js");
+  const sourceManifest = join3(sourceDir, "package.json");
+  try {
+    await stat(sourceIndex);
+    await stat(sourceManifest);
+  } catch (error) {
+    throw new Error(
+      `this plugin's own redirect files are missing under ${sourceDir}: ${String(error?.message ?? error)}. Reinstall the plugin package and press the button again.`
+    );
+  }
+  const stamp = {
+    package: REDIRECT_PACKAGE,
+    version,
+    source: baseDir,
+    copiedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  await rm2(redirectDir, { recursive: true, force: true });
+  await mkdir3(redirectDir, { recursive: true });
+  await cp(sourceManifest, join3(redirectDir, "package.json"));
+  await cp(sourceIndex, join3(redirectDir, "index.js"));
+  await writeFile3(join3(redirectDir, "base.js"), baseSource);
+  await writeFile3(join3(redirectDir, STAMP_FILE), JSON.stringify(stamp, void 0, 2) + "\n");
+  return { wired: true, version, copiedAt: stamp.copiedAt, source: baseDir };
+}
+
 // src/panel-copy.ts
 var FALLBACK_ENABLED_COPY = {
   en: "When a compaction keeps failing to produce a usable summary, fall back to a summary the plugin writes itself from the session events, instead of failing the compaction again. Off (the default) reports the failure and leaves the conversation untouched, which is the conservative behaviour: nothing enters the context that a model did not write. On, the compaction always lands, at the cost of a summary that reads like a ledger and carries none of a model summary judgement. The mechanical summary cannot invent anything, because every line of it comes from the events themselves.",
@@ -1457,7 +1748,7 @@ import {
   RETRIEVAL_RECEIPT_NOTE,
   TOOL_RESULT_STORE_CEILING_CHARS,
   clampToStoreCeiling
-} from "dsh-context-zip-engine/prompt";
+} from "dsh-context-zip/engine/prompt";
 var TEXT_OUTPUT = {
   schema: { type: "string" },
   render: (_args, value) => [{ type: "text", text: String(value) }]
@@ -2549,6 +2840,8 @@ async function resolveEngineClass() {
 }
 async function apply(ctx) {
   const noteStore = new NoteStore();
+  const pluginDir = dirname3(dirname3(fileURLToPath2(import.meta.url)));
+  const profileBaseUrl = ctx.baseUrl;
   const reminded = /* @__PURE__ */ new WeakSet();
   const lastAssistantSeqs = /* @__PURE__ */ new Map();
   let chain = Promise.resolve();
@@ -2826,6 +3119,11 @@ async function apply(ctx) {
         return scope.get() ?? next;
       },
       listSegments: (sessionId) => service.listSegments(sessionId),
+      // The settings panel's "wire the compaction row" read and action. Both go
+      // through `./wire.ts`, which owns the profile derivation and the guards; the
+      // route only decides which verb is allowed and how a failure is reported.
+      readWireStatus: () => readWireStatus({ baseUrl: profileBaseUrl, pluginDir }),
+      wireRow: () => wireCompactionRow({ baseUrl: profileBaseUrl, pluginDir }),
       // 面板的模型下拉框读这个。从活的注册表现读，所以 adapter 增删路由之后刷新
       // 面板就能看到，不需要重启，也不需要在插件里维护第二份清单。
       listModels: () => readModelCatalog(ctx.llm),
