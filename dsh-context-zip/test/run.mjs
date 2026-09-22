@@ -20,7 +20,7 @@ import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -4951,6 +4951,119 @@ try {
   is('installer: the cross-home store survives the switch', existsSyncSafe(join(otherHome, 'context-zip', 'notes', 'theirs.md')), true);
 
   await rm(probe, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// Installing from a copy that lives under `node_modules`
+//
+// npm and pnpm install this package as `<somewhere>/node_modules/dsh-context-zip`,
+// so that copy's `install.mjs` is the one a user runs. The copy step asks its
+// filter about the root as well, and that root has `node_modules` in its path: a
+// filter that tests the ABSOLUTE path rejects the root, skips the whole copy, and
+// leaves the profile with the plugin directory removed — it was removed just
+// above — while the script still prints success. The checks below pin the copy as
+// kept, and pin the old absolute-path filter as the failure it is, so this guard
+// cannot pass on a no-op.
+// ---------------------------------------------------------------------------
+{
+  const pluginRoot = dirname(here);
+  const sourceVersion = JSON.parse(await readFile(join(pluginRoot, 'package.json'), 'utf8')).version;
+  const probe = await mkdtemp(join(tmpdir(), 'zc-installer-nm-'));
+  const COPY_ONLY = /[\\/](node_modules|\.git|graphify-out)([\\/]|$)/u;
+  const copyTree = (target) =>
+    cp(pluginRoot, target, {
+      recursive: true,
+      filter: (source) => {
+        const inner = relative(pluginRoot, source);
+        if (inner === '') return true;
+        return !COPY_ONLY.test(inner);
+      },
+    });
+  const makeProfile = async (name) => {
+    const home = join(probe, name, 'home');
+    const profileDir = join(home, 'profiles', 'web');
+    const pluginDir = join(profileDir, 'node_modules', 'dsh-context-zip');
+    // A sentinel standing in for an already-installed plugin: the install has to
+    // replace it, so "the directory still exists" cannot pass on the sentinel.
+    await mkdir(pluginDir, { recursive: true });
+    await writeFile(join(profileDir, 'package.json'), JSON.stringify({ name: 'web', dsh: { profile: { bundles: [] } } }));
+    await writeFile(join(pluginDir, 'package.json'), JSON.stringify({ name: 'dsh-context-zip', version: 'SENTINEL' }));
+    // The shipped backend the installer reads BEFORE it writes the redirect. It
+    // has to sit above the profile so `createRequire` walks out to it.
+    const shippedStub = join(home, 'node_modules', '@deepseek-ai', 'dsh-compaction-basic');
+    await mkdir(shippedStub, { recursive: true });
+    await writeFile(
+      join(shippedStub, 'package.json'),
+      JSON.stringify({ name: '@deepseek-ai/dsh-compaction-basic', version: '9.9.9-shipped', main: 'index.js' }),
+    );
+    await writeFile(join(shippedStub, 'index.js'), 'module.exports = {};\n');
+    return {
+      profileDir,
+      pluginDir,
+      redirectDir: join(profileDir, 'node_modules', '@deepseek-ai', 'dsh-compaction-basic'),
+    };
+  };
+  const runCopy = (copyDir, profileDir) => {
+    const result = spawnSync(process.execPath, [join(copyDir, 'install.mjs'), '--profile-dir', profileDir], {
+      encoding: 'utf8',
+    });
+    return { status: result.status, out: `${result.stdout ?? ''}${result.stderr ?? ''}` };
+  };
+
+  try {
+    // The real shape: the installer being run IS the copy under `node_modules`.
+    const fixedCopy = join(probe, 'fixed-copy', 'node_modules', 'dsh-context-zip');
+    await copyTree(fixedCopy);
+    const fixed = await makeProfile('fixed');
+    const installed = runCopy(fixedCopy, fixed.profileDir);
+    is('installer node_modules: 从 node_modules 副本安装成功退出', installed.status, 0);
+    is('installer node_modules: 插件目录仍存在', existsSyncSafe(fixed.pluginDir), true);
+    let manifestText = '';
+    try {
+      manifestText = await readFile(join(fixed.pluginDir, 'package.json'), 'utf8');
+    } catch {
+      manifestText = '';
+    }
+    let replaced = null;
+    try {
+      replaced = JSON.parse(manifestText);
+    } catch {
+      replaced = null;
+    }
+    is('installer node_modules: 哨兵被真实内容替换', replaced?.version, sourceVersion);
+    is('installer node_modules: 留下的 manifest 不是哨兵', manifestText.includes('SENTINEL'), false);
+    is('installer node_modules: 重定向包已写好', existsSyncSafe(join(fixed.redirectDir, 'package.json')), true);
+    is('installer node_modules: 重定向戳已写好', existsSyncSafe(join(fixed.redirectDir, 'base.json')), true);
+    let stamp = null;
+    try {
+      stamp = JSON.parse(await readFile(join(fixed.redirectDir, 'base.json'), 'utf8'));
+    } catch {
+      stamp = null;
+    }
+    is('installer node_modules: 重定向戳指向装上的后端', stamp?.version, '9.9.9-shipped');
+
+    // The counter-case: the same copy with the filter spelled the old way must
+    // still lose the plugin directory, or this guard would pass on a no-op.
+    const oldCopy = join(probe, 'old-copy', 'node_modules', 'dsh-context-zip');
+    await copyTree(oldCopy);
+    const installerPath = join(oldCopy, 'install.mjs');
+    const fixedText = await readFile(installerPath, 'utf8');
+    const OLD_FILTER =
+      /filter: \(source\) => \{\s*const inner = relative\(here, source\);\s*if \(inner === ''\) return true;\s*return !DEV_ONLY\.test\(inner\) && !source\.endsWith\('install\.mjs'\);\s*\},/u;
+    const oldText = fixedText.replace(
+      OLD_FILTER,
+      "filter: (source) => !DEV_ONLY.test(source) && !source.endsWith('install.mjs'),",
+    );
+    ok('installer node_modules: 反面对照确实把 filter 换成了旧写法', oldText !== fixedText);
+    await writeFile(installerPath, oldText);
+    const broken = await makeProfile('broken');
+    const broke = runCopy(oldCopy, broken.profileDir);
+    is('installer node_modules: 旧写法仍然打印成功', broke.status, 0);
+    is('installer node_modules: 旧写法把插件目录删掉且不补回', existsSyncSafe(broken.pluginDir), false);
+    is('installer node_modules: 旧写法下 profile 里没有插件内容', existsSyncSafe(join(broken.pluginDir, 'package.json')), false);
+  } finally {
+    await rm(probe, { recursive: true, force: true });
+  }
 }
 
   // ── locateAround: the offset a hit has to report to be usable ───────────
