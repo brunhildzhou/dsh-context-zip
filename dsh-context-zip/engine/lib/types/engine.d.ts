@@ -283,15 +283,8 @@ export declare const PLUGIN_ID = "context-zip";
  * @returns one frozen user message carrying the instruction.
  */
 export declare function buildSummarizationInstruction(notes: any): {
-    content: {
-        type: "text";
-        text: string;
-    }[];
-    source: {
-        kind: "plugin";
-        plugin: string;
-        form: "instructions";
-    };
+    readonly content: readonly import("@deepseek-ai/dsh-llm").ContentBlock[];
+    readonly source: import("@deepseek-ai/dsh-llm").MessageSource;
 } & Pick<import("@deepseek-ai/dsh-llm").UserMessage, "id" | "role">;
 /**
  * Resolve the provider/model one summarization call should use.

@@ -5,7 +5,7 @@
 [![license](https://img.shields.io/github/license/brunhildzhou/dsh-context-zip)](./LICENSE)
 [![stars](https://img.shields.io/github/stars/brunhildzhou/dsh-context-zip)](https://github.com/brunhildzhou/dsh-context-zip)
 
-**A context-compaction plugin for the DeepSeek Harness (DSH): it takes over the harness's built-in compaction summarizer, writes a fixed five-section handoff summary instead, and keeps every compacted span readable in a segment index.** Version `0.1.2`, MIT licensed. See [dsh-context-zip on npm](https://www.npmjs.com/package/dsh-context-zip). [中文](./README.md)
+**A context-compaction plugin for the DeepSeek Harness (DSH): it takes over the harness's built-in compaction summarizer, writes a fixed five-section handoff summary instead, and keeps every compacted span readable in a segment index.** Version `0.1.3`, MIT licensed. See [dsh-context-zip on npm](https://www.npmjs.com/package/dsh-context-zip). [中文](./README.md)
 
 ## At a glance
 
@@ -78,7 +78,7 @@ Real-device screenshots are still pending; the list and placeholders are in `doc
 
 ## Compatibility and boundaries
 
-- **Host**: DeepSeek Harness, peer range `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0`; tested against `0.1.5-rc.2` and `0.1.6-alpha.2`, other 0.1.x versions were not tested one by one.
+- **Host**: DeepSeek Harness, peer range `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0 || >=0.1.7-alpha.1 <0.2.0-0`; tested against `0.1.5-rc.2`, `0.1.6-alpha.2` and `0.1.7-alpha.1`, other 0.1.x versions were not tested one by one.
 - **Node.js**: `^22.19.0 || >=24.0.0` (`engines` in `dsh-context-zip/package.json`).
 - **Peer dependencies** resolve from the profile's `node_modules` and are not installed with this plugin.
 - **UI languages**: Chinese and English, two string tables with matching key sets.

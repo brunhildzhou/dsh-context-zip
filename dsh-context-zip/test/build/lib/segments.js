@@ -3160,8 +3160,9 @@ var DEFAULT_THROTTLE = false;
 var DEFAULT_FALLBACK_AFTER_FAILURES = 5;
 var DEFAULT_REWRITE_ENABLED = false;
 var SETTINGS_NS = "context-zip";
+var VOLATILE_REF = Symbol.for("cosmokit.volatile.write");
 var DEFAULT_ENABLED = false;
-var ContextZipSettings = z.object({
+var settingsFields = {
   enabled: z.boolean().default(DEFAULT_ENABLED).description(
     "Compact new sessions with this plugin: the five-section handoff template plus working notes merged into the summary. Off delegates to the shipped backend."
   ),
@@ -3191,7 +3192,15 @@ var ContextZipSettings = z.object({
   tracePath: z.string().default("").description(
     "Optional file to append one JSON line per history retrieval to. Empty (the default) writes nothing. Use it to see how the retrieval throttle behaves: each line carries the turn, the retrieval number, whether it was a sweep or a read, how many events were new, how many were withheld as already-held, the zero-novelty streak, and whether narrowing is in force. This harness ships no logger exporter, so plugin logs reach only an in-memory buffer; a file is the one place the numbers can actually be read from."
   )
-});
+};
+var ContextZipSettings = z.object(settingsFields);
+function liveField(field) {
+  return typeof field?.volatile === "function" ? field.volatile() : field;
+}
+var CONFIG_IS_LIVE = typeof settingsFields.enabled?.volatile === "function";
+var Config = z.object(
+  Object.fromEntries(Object.entries(settingsFields).map(([key, field]) => [key, liveField(field)]))
+);
 var settingsState = {
   /** Resolved value, or null when no settings provider is composed. */
   value: null,

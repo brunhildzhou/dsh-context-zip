@@ -14,9 +14,37 @@
  *
  * @module dsh-context-zip
  */
+import { type ContextFormed } from '@deepseek-ai/dsh-llm';
 import z from '@deepseek-ai/schemastery';
 import { sessionTitlesFor } from './session-titles.ts';
 export { sessionTitlesFor };
+/**
+ * This plugin's own message-source kind.
+ *
+ * 0.1.7-alpha.1 deleted the shared catch-all `plugin` kind out of
+ * `MessageSourceMap` and made the interface merge-extensible instead: the
+ * harness's own words are now "each producer declares its own `kind` in its own
+ * module; there is no shared catch-all `plugin` kind"
+ * (`@deepseek-ai/dsh-llm/lib/types/message.d.ts`, above `MessageSourceMap`).
+ *
+ * This is a TYPE-ONLY declaration and changes nothing at runtime: the messages
+ * already carry `kind: 'plugin'` and always did, `createUserMessage` reads no
+ * `kind` at all, and consumers fall through a kind they do not know. Without it
+ * the four construction sites below simply stop typechecking on this line, with
+ * the JSON written to the log unchanged either way.
+ *
+ * `& ContextFormed` rather than a hand-written `form` union, so the forms stay
+ * the harness's closed set (`instructions`, `notice` + `summary`, or none).
+ */
+declare module '@deepseek-ai/dsh-llm' {
+    interface MessageSourceMap {
+        plugin: {
+            readonly kind: 'plugin';
+            /** Stable id of the plugin that produced the message. */
+            readonly plugin: string;
+        } & ContextFormed;
+    }
+}
 /** Plugin name as it appears in the composed tree and the logs. */
 export declare const name = "dsh-context-zip";
 /**
@@ -43,41 +71,60 @@ export declare const name = "dsh-context-zip";
 export declare const inject: string[];
 export declare const SETTINGS_NS = "context-zip";
 /**
- * Settings shape: one global switch plus a per-session override table.
+ * The namespace schema the 0.1.5/0.1.6 settings service registers.
  *
- * The switch selects which summarizer a session compacts with, not merely
- * whether notes are recorded. `true` means this plugin's five-section handoff
- * template plus working notes; `false` delegates that session back to the
- * shipped backend, cap and wording included. Notes have no meaning on their own:
- * they only exist to be merged into this plugin's summary, so the two cannot be
- * separate switches without inventing a state where the model writes notes
- * nothing will ever read.
+ * Unchanged from before this port, and still the schema the older line resolves:
+ * that is what keeps a user on the older line exactly where they were.
  */
-export declare const ContextZipSettings: z<Schemastery.ObjectS<{
-    enabled: z<boolean, boolean>;
-    agents: z<import("@deepseek-ai/cosmokit").Dict<boolean, string>, import("@deepseek-ai/cosmokit").Dict<boolean, string>>;
-    retrieval: z<"granular" | "batched" | "batched-only", "granular" | "batched" | "batched-only">;
-    retrievalAgents: z<import("@deepseek-ai/cosmokit").Dict<"granular" | "batched" | "batched-only", string>, import("@deepseek-ai/cosmokit").Dict<"granular" | "batched" | "batched-only", string>>;
-    throttle: z<boolean, boolean>;
-    fallbackEnabled: z<boolean, boolean>;
-    fallbackAfterFailures: z<number, number>;
-    rewriteEnabled: z<boolean, boolean>;
-    rewriteProvider: z<string, string>;
-    rewriteModel: z<string, string>;
-    tracePath: z<string, string>;
-}>, Schemastery.ObjectT<{
-    enabled: z<boolean, boolean>;
-    agents: z<import("@deepseek-ai/cosmokit").Dict<boolean, string>, import("@deepseek-ai/cosmokit").Dict<boolean, string>>;
-    retrieval: z<"granular" | "batched" | "batched-only", "granular" | "batched" | "batched-only">;
-    retrievalAgents: z<import("@deepseek-ai/cosmokit").Dict<"granular" | "batched" | "batched-only", string>, import("@deepseek-ai/cosmokit").Dict<"granular" | "batched" | "batched-only", string>>;
-    throttle: z<boolean, boolean>;
-    fallbackEnabled: z<boolean, boolean>;
-    fallbackAfterFailures: z<number, number>;
-    rewriteEnabled: z<boolean, boolean>;
-    rewriteProvider: z<string, string>;
-    rewriteModel: z<string, string>;
-    tracePath: z<string, string>;
-}>>;
+export declare const ContextZipSettings: z<Schemastery.ObjectS<NoInfer<{
+    enabled: z<boolean, boolean, "defined">;
+    agents: z<import("@deepseek-ai/cosmokit").Dict<boolean, string>, import("@deepseek-ai/cosmokit").Dict<boolean, string>, "defined">;
+    retrieval: z<"granular" | "batched" | "batched-only", "granular" | "batched" | "batched-only", "defined">;
+    retrievalAgents: z<import("@deepseek-ai/cosmokit").Dict<"granular" | "batched" | "batched-only", string>, import("@deepseek-ai/cosmokit").Dict<"granular" | "batched" | "batched-only", string>, "defined">;
+    throttle: z<boolean, boolean, "defined">;
+    fallbackEnabled: z<boolean, boolean, "defined">;
+    fallbackAfterFailures: z<number, number, "defined">;
+    rewriteEnabled: z<boolean, boolean, "defined">;
+    rewriteProvider: z<string, string, "defined">;
+    rewriteModel: z<string, string, "defined">;
+    tracePath: z<string, string, "defined">;
+}>>, Schemastery.ObjectT<NoInfer<{
+    enabled: z<boolean, boolean, "defined">;
+    agents: z<import("@deepseek-ai/cosmokit").Dict<boolean, string>, import("@deepseek-ai/cosmokit").Dict<boolean, string>, "defined">;
+    retrieval: z<"granular" | "batched" | "batched-only", "granular" | "batched" | "batched-only", "defined">;
+    retrievalAgents: z<import("@deepseek-ai/cosmokit").Dict<"granular" | "batched" | "batched-only", string>, import("@deepseek-ai/cosmokit").Dict<"granular" | "batched" | "batched-only", string>, "defined">;
+    throttle: z<boolean, boolean, "defined">;
+    fallbackEnabled: z<boolean, boolean, "defined">;
+    fallbackAfterFailures: z<number, number, "defined">;
+    rewriteEnabled: z<boolean, boolean, "defined">;
+    rewriteProvider: z<string, string, "defined">;
+    rewriteModel: z<string, string, "defined">;
+    tracePath: z<string, string, "defined">;
+}>>, "plain">;
+/**
+ * Whether this process can carry live config at all.
+ *
+ * False means the profile resolved a schemastery older than the one that added
+ * `volatile()`. The settings document then has no field to show for this plugin,
+ * which costs the generated form and the settings-service write path — the row
+ * config still loads, and the plugin's own panel writes through the
+ * configuration editor instead. See `apply`.
+ */
+export declare const CONFIG_IS_LIVE: boolean;
+/**
+ * The plugin's own row schema, and the settings form 0.1.7-alpha.1 projects.
+ *
+ * Every field is marked live so the settings document has something to show:
+ * `volatileForm` drops any field that is not live, and a plugin with no live
+ * field gets no entry in the document at all. Built from {@link settingsFields}
+ * rather than written out again, because a second copy is a second place for a
+ * default or a description to drift.
+ */
+export declare const Config: z<Schemastery.ObjectS<NoInfer<{
+    [k: string]: any;
+}>>, Schemastery.ObjectT<NoInfer<{
+    [k: string]: any;
+}>>, "plain">;
 /** One resolved settings value. */
 type SettingsValue = {
     enabled?: boolean;
@@ -116,10 +163,17 @@ export declare function setEngineClass(EngineClass: any): void;
 /**
  * Compose the plugin.
  *
+ * `config` is the plugin's own profile row, resolved against {@link Config} by
+ * the Loader. From 0.1.7-alpha.1 that row IS the settings store, so the second
+ * parameter is a real settings source and not decoration; on the older line it
+ * carries whatever the row wrote (normally nothing) and the registered namespace
+ * stays the source of truth.
+ *
  * @param ctx - plugin context.
+ * @param config - the resolved row config, with schema defaults already applied.
  * @returns the disposer that unloads everything this plugin added.
  */
-export declare function apply(ctx: any): Promise<() => void>;
+export declare function apply(ctx: any, config: any): Promise<() => void>;
 /**
  * Resolve the effective mode for one session.
  *
@@ -205,35 +259,49 @@ export declare function effectiveMode(live: any): {
     overrides: number;
     live: any;
 };
+/**
+ * The default plugin object.
+ *
+ * `Config` has to be HERE, not merely a named export: the Loader normalizes an
+ * ESM module with `exports.default ?? exports`, so once a default object exists
+ * the Loader's `runtime.Config` is read off it and a named `Config` beside it is
+ * never seen. Without this key 0.1.7-alpha.1 has no schema to project and the
+ * plugin gets no row in the settings document at all.
+ */
 declare const _default: {
     name: string;
     inject: string[];
     apply: typeof apply;
-    ContextZipSettings: z<Schemastery.ObjectS<{
-        enabled: z<boolean, boolean>;
-        agents: z<import("@deepseek-ai/cosmokit").Dict<boolean, string>, import("@deepseek-ai/cosmokit").Dict<boolean, string>>;
-        retrieval: z<"granular" | "batched" | "batched-only", "granular" | "batched" | "batched-only">;
-        retrievalAgents: z<import("@deepseek-ai/cosmokit").Dict<"granular" | "batched" | "batched-only", string>, import("@deepseek-ai/cosmokit").Dict<"granular" | "batched" | "batched-only", string>>;
-        throttle: z<boolean, boolean>;
-        fallbackEnabled: z<boolean, boolean>;
-        fallbackAfterFailures: z<number, number>;
-        rewriteEnabled: z<boolean, boolean>;
-        rewriteProvider: z<string, string>;
-        rewriteModel: z<string, string>;
-        tracePath: z<string, string>;
-    }>, Schemastery.ObjectT<{
-        enabled: z<boolean, boolean>;
-        agents: z<import("@deepseek-ai/cosmokit").Dict<boolean, string>, import("@deepseek-ai/cosmokit").Dict<boolean, string>>;
-        retrieval: z<"granular" | "batched" | "batched-only", "granular" | "batched" | "batched-only">;
-        retrievalAgents: z<import("@deepseek-ai/cosmokit").Dict<"granular" | "batched" | "batched-only", string>, import("@deepseek-ai/cosmokit").Dict<"granular" | "batched" | "batched-only", string>>;
-        throttle: z<boolean, boolean>;
-        fallbackEnabled: z<boolean, boolean>;
-        fallbackAfterFailures: z<number, number>;
-        rewriteEnabled: z<boolean, boolean>;
-        rewriteProvider: z<string, string>;
-        rewriteModel: z<string, string>;
-        tracePath: z<string, string>;
-    }>>;
+    Config: z<Schemastery.ObjectS<NoInfer<{
+        [k: string]: any;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        [k: string]: any;
+    }>>, "plain">;
+    ContextZipSettings: z<Schemastery.ObjectS<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        agents: z<import("@deepseek-ai/cosmokit").Dict<boolean, string>, import("@deepseek-ai/cosmokit").Dict<boolean, string>, "defined">;
+        retrieval: z<"granular" | "batched" | "batched-only", "granular" | "batched" | "batched-only", "defined">;
+        retrievalAgents: z<import("@deepseek-ai/cosmokit").Dict<"granular" | "batched" | "batched-only", string>, import("@deepseek-ai/cosmokit").Dict<"granular" | "batched" | "batched-only", string>, "defined">;
+        throttle: z<boolean, boolean, "defined">;
+        fallbackEnabled: z<boolean, boolean, "defined">;
+        fallbackAfterFailures: z<number, number, "defined">;
+        rewriteEnabled: z<boolean, boolean, "defined">;
+        rewriteProvider: z<string, string, "defined">;
+        rewriteModel: z<string, string, "defined">;
+        tracePath: z<string, string, "defined">;
+    }>>, Schemastery.ObjectT<NoInfer<{
+        enabled: z<boolean, boolean, "defined">;
+        agents: z<import("@deepseek-ai/cosmokit").Dict<boolean, string>, import("@deepseek-ai/cosmokit").Dict<boolean, string>, "defined">;
+        retrieval: z<"granular" | "batched" | "batched-only", "granular" | "batched" | "batched-only", "defined">;
+        retrievalAgents: z<import("@deepseek-ai/cosmokit").Dict<"granular" | "batched" | "batched-only", string>, import("@deepseek-ai/cosmokit").Dict<"granular" | "batched" | "batched-only", string>, "defined">;
+        throttle: z<boolean, boolean, "defined">;
+        fallbackEnabled: z<boolean, boolean, "defined">;
+        fallbackAfterFailures: z<number, number, "defined">;
+        rewriteEnabled: z<boolean, boolean, "defined">;
+        rewriteProvider: z<string, string, "defined">;
+        rewriteModel: z<string, string, "defined">;
+        tracePath: z<string, string, "defined">;
+    }>>, "plain">;
     SETTINGS_NS: string;
     resolveMode: typeof resolveMode;
     setEngineClass: typeof setEngineClass;

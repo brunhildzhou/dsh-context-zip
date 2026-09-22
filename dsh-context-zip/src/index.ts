@@ -18,7 +18,7 @@
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import { createUserMessage, type ContextFormed } from '@deepseek-ai/dsh-llm';
 import z from '@deepseek-ai/schemastery';
 
 import {
@@ -57,6 +57,34 @@ import { readWireStatus, wireCompactionRow } from './wire.ts';
 export { sessionTitlesFor };
 import { FALLBACK_ENABLED_COPY, REWRITE_ENABLED_COPY } from './panel-copy.ts';
 import { registerTools, setThrottleEnabled, setThrottleListener, setTracePath } from './tools.ts';
+
+/**
+ * This plugin's own message-source kind.
+ *
+ * 0.1.7-alpha.1 deleted the shared catch-all `plugin` kind out of
+ * `MessageSourceMap` and made the interface merge-extensible instead: the
+ * harness's own words are now "each producer declares its own `kind` in its own
+ * module; there is no shared catch-all `plugin` kind"
+ * (`@deepseek-ai/dsh-llm/lib/types/message.d.ts`, above `MessageSourceMap`).
+ *
+ * This is a TYPE-ONLY declaration and changes nothing at runtime: the messages
+ * already carry `kind: 'plugin'` and always did, `createUserMessage` reads no
+ * `kind` at all, and consumers fall through a kind they do not know. Without it
+ * the four construction sites below simply stop typechecking on this line, with
+ * the JSON written to the log unchanged either way.
+ *
+ * `& ContextFormed` rather than a hand-written `form` union, so the forms stay
+ * the harness's closed set (`instructions`, `notice` + `summary`, or none).
+ */
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    plugin: {
+      readonly kind: 'plugin';
+      /** Stable id of the plugin that produced the message. */
+      readonly plugin: string;
+    } & ContextFormed;
+  }
+}
 
 /** Plugin name as it appears in the composed tree and the logs. */
 export const name = 'dsh-context-zip';
@@ -111,6 +139,43 @@ const DEFAULT_REWRITE_ENABLED = false;
 
 export const SETTINGS_NS = 'context-zip';
 
+/**
+ * Symbol cosmokit stamps on a config value the Loader keeps LIVE.
+ *
+ * From 0.1.7-alpha.1 the plugin's settings ARE its own profile row's config, and
+ * the row schema marks every field `volatile()` so an edit reaches the running
+ * instance without a remount. A volatile field resolves to one of these
+ * references rather than to the value itself, so every read has to unwrap it.
+ * The symbol is looked up through the shared registry on purpose: the plugin and
+ * the harness may be different copies of cosmokit, and only a `Symbol.for` key
+ * survives that.
+ */
+const VOLATILE_REF = Symbol.for('cosmokit.volatile.write');
+
+/**
+ * Whether one resolved config field is a live reference rather than a plain value.
+ *
+ * @param value - a field of the Loader-resolved Config.
+ * @returns true when the field has to be read through `get()`.
+ */
+function isConfigReference(value) {
+  return typeof value === 'object' && value !== null && VOLATILE_REF in value;
+}
+
+/**
+ * The value behind one resolved config field.
+ *
+ * One function covers both supported harness lines: a `volatile()` field answers
+ * through `get()`, and every other field (or the whole thing, on a loader that
+ * never resolved a Config) is already the value.
+ *
+ * @param value - a field of the Loader-resolved Config, or a plain value.
+ * @returns the current value.
+ */
+function configValue(value) {
+  return isConfigReference(value) ? value.get() : value;
+}
+
 /** Default per-session compaction mode; a new session ships on the shipped backend. */
 const DEFAULT_ENABLED = false;
 
@@ -125,7 +190,23 @@ const DEFAULT_ENABLED = false;
  * separate switches without inventing a state where the model writes notes
  * nothing will ever read.
  */
-export const ContextZipSettings = z.object({
+/**
+ * Every settings field, defined once.
+ *
+ * Two schemas are built from this table, because the two supported harness lines
+ * read a plugin's settings from different places:
+ *
+ * - `ContextZipSettings` is the schema the 0.1.5/0.1.6 settings service registers
+ *   a namespace with. It is unchanged, and deliberately carries no `volatile()`
+ *   marking: that service resolves the value itself, and a volatile field would
+ *   hand it a reference instead of a value — which is exactly the breakage this
+ *   port must not cause for users still on the older line.
+ * - `Config` is the schema 0.1.7-alpha.1 projects into the settings document. It
+ *   is the plugin's own row schema, and every field is marked `volatile()` so the
+ *   settings service can see it at all: `volatileForm` drops any field that is
+ *   not live, and a plugin with no live field gets no entry in the document.
+ */
+const settingsFields = {
   enabled: z
     .boolean()
     .default(DEFAULT_ENABLED)
@@ -188,7 +269,56 @@ export const ContextZipSettings = z.object({
     .description(
       'Optional file to append one JSON line per history retrieval to. Empty (the default) writes nothing. Use it to see how the retrieval throttle behaves: each line carries the turn, the retrieval number, whether it was a sweep or a read, how many events were new, how many were withheld as already-held, the zero-novelty streak, and whether narrowing is in force. This harness ships no logger exporter, so plugin logs reach only an in-memory buffer; a file is the one place the numbers can actually be read from.',
     ),
-});
+};
+
+/**
+ * The namespace schema the 0.1.5/0.1.6 settings service registers.
+ *
+ * Unchanged from before this port, and still the schema the older line resolves:
+ * that is what keeps a user on the older line exactly where they were.
+ */
+export const ContextZipSettings = z.object(settingsFields);
+
+/**
+ * Mark one field live when the schemastery in this process can.
+ *
+ * `Schema.volatile()` is NOT in every schemastery a profile may hoist: measured,
+ * the profile's own copy here is 3.18.1 and has no such method at all, while the
+ * 3.18.3 that ships with the harness does. A plugin that called it unconditionally
+ * would therefore fail to IMPORT on such a profile — the module-level call is the
+ * very first thing it does — so the marking is feature-detected, exactly like the
+ * settings-service shape below.
+ *
+ * @param field - one field schema from {@link settingsFields}.
+ * @returns the live schema when supported, the plain one otherwise.
+ */
+function liveField(field) {
+  return typeof field?.volatile === 'function' ? field.volatile() : field;
+}
+
+/**
+ * Whether this process can carry live config at all.
+ *
+ * False means the profile resolved a schemastery older than the one that added
+ * `volatile()`. The settings document then has no field to show for this plugin,
+ * which costs the generated form and the settings-service write path — the row
+ * config still loads, and the plugin's own panel writes through the
+ * configuration editor instead. See `apply`.
+ */
+export const CONFIG_IS_LIVE = typeof settingsFields.enabled?.volatile === 'function';
+
+/**
+ * The plugin's own row schema, and the settings form 0.1.7-alpha.1 projects.
+ *
+ * Every field is marked live so the settings document has something to show:
+ * `volatileForm` drops any field that is not live, and a plugin with no live
+ * field gets no entry in the document at all. Built from {@link settingsFields}
+ * rather than written out again, because a second copy is a second place for a
+ * default or a description to drift.
+ */
+export const Config = z.object(
+  Object.fromEntries(Object.entries(settingsFields).map(([key, field]) => [key, liveField(field)])),
+);
 
 /** One resolved settings value. */
 type SettingsValue = {
@@ -362,10 +492,17 @@ async function resolveEngineClass() {
 /**
  * Compose the plugin.
  *
+ * `config` is the plugin's own profile row, resolved against {@link Config} by
+ * the Loader. From 0.1.7-alpha.1 that row IS the settings store, so the second
+ * parameter is a real settings source and not decoration; on the older line it
+ * carries whatever the row wrote (normally nothing) and the registered namespace
+ * stays the source of truth.
+ *
  * @param ctx - plugin context.
+ * @param config - the resolved row config, with schema defaults already applied.
  * @returns the disposer that unloads everything this plugin added.
  */
-export async function apply(ctx) {
+export async function apply(ctx, config) {
   const noteStore = new NoteStore();
   // This plugin's own directory, for the `redirect/` files the wire route copies
   // out. It is read from `import.meta.url` deliberately and ONLY here, and the
@@ -399,6 +536,9 @@ export async function apply(ctx) {
   // services appear, which is the supported way to depend on something optional.
   let scope = null;
   const optionalFibers = [];
+  // Pending "read the row once it is describable" timers, cleared with the plugin
+  // so a reload cannot leave one pointing at a disposed scope.
+  const settleTimers: Set<ReturnType<typeof setTimeout>> = new Set();
   const whenAvailable = (names, callback) => {
     try {
       optionalFibers.push(ctx.inject(names, callback));
@@ -500,23 +640,132 @@ export async function apply(ctx) {
     }
   };
 
+  /**
+   * The settings key the document and the write methods address.
+   *
+   * Not the same string on the two lines, which is why it is a variable: the
+   * older service keys by the namespace the plugin registered, while
+   * 0.1.7-alpha.1 keys by the profile ENTRY ID — `dsh-context-zip`, the row id
+   * from the bundle patch, which is deliberately not `SETTINGS_NS`.
+   */
+  let settingsNs = SETTINGS_NS;
+
+  /**
+   * Seed the live snapshot from the row config the Loader resolved.
+   *
+   * 0.1.7-alpha.1 made the plugin's own row its settings store, and `apply` is
+   * handed that resolved config directly, so the values are knowable before the
+   * `settings` service composes — and stay knowable on a profile where it never
+   * does. The seed is a baseline only: once the service appears,
+   * {@link refreshSettings} re-reads the same values through it and adds the
+   * revision and the "which fields the user set" record the panel needs.
+   *
+   * The gate is deliberately loose — "the Loader handed this plugin an object" —
+   * rather than a version number or a volatile reference. {@link Config} is
+   * exported unconditionally, so a Loader that applies it always resolves every
+   * field and its default, live or not; a caller that never applied a schema
+   * passes the raw row (or nothing). Reading a default back is harmless on the
+   * older line, where the registered namespace immediately overwrites it, and it
+   * is the whole point on the newer one, where the row IS the store.
+   */
+  if (config !== null && typeof config === 'object') {
+    settingsState.value = settingsFromConfig(config);
+    installGlobalReaders(settingsState.value);
+  }
+
   whenAvailable(['settings'], (scoped) => {
     const settings = scoped.settings;
-    scope = settings.register(SETTINGS_NS, ContextZipSettings, {
-      base: { enabled: DEFAULT_ENABLED, agents: {} },
-      applies: 'live',
-    });
     const reportSwitch = (message) => ctx.logger?.info?.(`[context-zip] ${message}`);
-    refreshSettings(scope, settings, reportSwitch);
+    // Which settings source this process has. Detected on the SERVICE, not on a
+    // version number: `register` is the whole of the older line's API surface and
+    // is gone in 0.1.7-alpha.1.
+    const usesForms = typeof settings.register !== 'function';
+    if (!usesForms) {
+      // 0.1.5/0.1.6, unchanged: the plugin registers a namespace of its own.
+      scope = settings.register(SETTINGS_NS, ContextZipSettings, {
+        base: { enabled: DEFAULT_ENABLED, agents: {} },
+        applies: 'live',
+      });
+    } else {
+      // 0.1.7-alpha.1 removed `register`, `installSection` and `get`. The row
+      // config is now the store, `configure` only attaches this instance's page
+      // policy, and every read goes through the Loader-held references so an edit
+      // reaches the running instance without a remount.
+      settingsNs = ctx.fiber?.entry?.options?.id ?? SETTINGS_NS;
+      try {
+        // `auto: false`: this plugin ships its own panel, so the harness must not
+        // generate a generic settings page beside it.
+        scoped.effect(() => settings.configure({ auto: false }, ctx.fiber));
+      } catch (error) {
+        ctx.logger?.warn?.(`[context-zip] configuring the settings page policy failed: ${String(error)}`);
+      }
+      scope = {
+        // Re-read on every call, so the value is as live as the references are.
+        get: () => settingsFromConfig(config),
+        replace: async (next) => {
+          if (CONFIG_IS_LIVE) {
+            // `replace`, never `update`: `update` merges nested objects, so an
+            // empty `agents` table would clear nothing. `replace` takes the
+            // finished value, which is what makes omission mean deletion here.
+            await settings.replace(settingsNs, next);
+            return;
+          }
+          // No live field means the settings service refuses every write to this
+          // entry ("has no volatile fields"), so fall back to the seam underneath
+          // it: the configuration editor writes the same profile row and applies
+          // the same validation, and this is the write `dsh-agent-default-model`
+          // performs for its own row. The cost is that the change lands as an
+          // ordinary config update rather than a live one, so the row reloads —
+          // which is why it is only the fallback.
+          const entry = ctx.fiber?.entry;
+          const editor = ctx.get('configEditor');
+          if (entry === undefined || editor === undefined) {
+            throw new Error(
+              'this profile cannot store plugin settings: its schemastery has no volatile() fields and no configuration editor is composed',
+            );
+          }
+          await editor.edit(entry, () => ({ ...next }));
+        },
+        // The Loader emits this on the plugin's own fiber once it has committed
+        // new volatile values: the moment every reader has to re-read.
+        watch: (callback) => {
+          ctx.on('loader/volatile-update', () => callback());
+        },
+      };
+    }
+    // The first read cannot see this plugin's own row on the forms line: the
+    // settings document refuses a fiber that is not ACTIVE yet, and this callback
+    // runs inside that very fiber's startup. The VALUES are already right — the
+    // seed read them off the resolved row config — but the revision and the
+    // "the user set this" record only exist once the row is describable, and the
+    // switch line would otherwise credit the default for a value the user set.
+    refreshSettings(scope, settings, settingsNs, usesForms ? undefined : reportSwitch);
     try {
       scope.watch(() => {
-        refreshSettings(scope, settings, reportSwitch);
+        refreshSettings(scope, settings, settingsNs, reportSwitch);
         // A presentation change has to reach sessions that are already open: the
         // restriction is a live mask, not a property frozen at creation.
         refreshRetrievalVisibility();
       });
     } catch (error) {
       ctx.logger?.warn?.(`[context-zip] watching the settings namespace failed: ${String(error)}`);
+    }
+    if (usesForms) {
+      // One macrotask later this row is ACTIVE and describable. Retrying briefly
+      // covers a startup that still has work to finish; `revision` is a number
+      // for any describable row, so `undefined` is the honest "not yet" signal.
+      const settle = (attempt) => {
+        const timer = setTimeout(
+          () => {
+            settleTimers.delete(timer);
+            refreshSettings(scope, settings, settingsNs, reportSwitch);
+            if (settingsState.revision === undefined && attempt < 10) settle(attempt + 1);
+          },
+          attempt === 0 ? 0 : 100,
+        );
+        settleTimers.add(timer);
+      };
+      settle(0);
     }
   });
 
@@ -847,6 +1096,8 @@ export async function apply(ctx) {
   );
 
   return () => {
+    for (const timer of settleTimers) clearTimeout(timer);
+    settleTimers.clear();
     for (const fiber of optionalFibers) {
       try {
         fiber?.dispose?.();
@@ -1146,35 +1397,91 @@ export function effectiveMode(live) {
   };
 }
 
-/** Re-read the settings value and its revision. */
 /**
  * Last reported switch state, so the log line below appears when the mode
  * changes rather than on every settings write.
  */
 let reportedSwitch;
 
-function refreshSettings(scope, settings, report) {
+/**
+ * Read the eleven settings fields off the row config the Loader resolved.
+ *
+ * One function serves both the seed and every later read. Fields arrive either as
+ * live references (a `volatile()` schema, which is the 0.1.7 line) or as plain
+ * values (a Loader that never applied {@link Config}), and the defaults are
+ * already applied by the Loader in both cases, so the only work here is unwrapping
+ * and keeping the two map fields from being `undefined`.
+ *
+ * @param config - the resolved row config, or anything else the Loader passed.
+ * @returns the resolved settings value.
+ */
+function settingsFromConfig(config) {
+  const source = config !== null && typeof config === 'object' ? config : {};
+  const read = (key) => configValue(source[key]);
+  const map = (key) => {
+    const value = read(key);
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  };
+  return {
+    enabled: read('enabled') === true,
+    agents: map('agents'),
+    retrieval: read('retrieval'),
+    retrievalAgents: map('retrievalAgents'),
+    throttle: read('throttle') === true,
+    fallbackEnabled: read('fallbackEnabled') === true,
+    fallbackAfterFailures: read('fallbackAfterFailures'),
+    rewriteEnabled: read('rewriteEnabled') === true,
+    rewriteProvider: typeof read('rewriteProvider') === 'string' ? read('rewriteProvider') : '',
+    rewriteModel: typeof read('rewriteModel') === 'string' ? read('rewriteModel') : '',
+    tracePath: typeof read('tracePath') === 'string' ? read('tracePath') : '',
+  };
+}
+
+/**
+ * Install the two readers a settings value drives globally rather than per session.
+ *
+ * Split out of {@link refreshSettings} because the row config is readable the
+ * moment `apply` runs, while the `settings` service may compose much later — and a
+ * profile with no `settings` row at all still has to honour a `tracePath` or a
+ * throttle written in its own row.
+ *
+ * @param value - the resolved settings value.
+ */
+function installGlobalReaders(value) {
+  // Tracing is global rather than per session, so it is installed here instead of going
+  // through the session-keyed lookups. A watch fires on every settings edit, so turning
+  // the path on or off takes effect without a restart.
+  try {
+    setTracePath(value?.tracePath ?? '');
+  } catch {
+    // A settings value that cannot be read leaves tracing exactly as it was.
+  }
+  try {
+    setThrottleEnabled(value?.throttle ?? DEFAULT_THROTTLE);
+  } catch {
+    // Same: an unreadable value leaves the throttle where it was.
+  }
+}
+
+/**
+ * Re-read the settings value and its revision.
+ *
+ * @param scope - the namespace adapter for the settings source in use.
+ * @param settings - the settings service, read for the revision and the user layer.
+ * @param ns - the key `describe()` reports this plugin under: the registered
+ *   namespace on the older line, the profile entry id on the 0.1.7 line.
+ * @param report - optional sink for the switch-change line.
+ */
+function refreshSettings(scope, settings, ns, report) {
   try {
     settingsState.value = scope.get();
   } catch (error) {
     settingsState.value = null;
     return;
   }
-  // Tracing is global rather than per session, so it is installed here instead of going
-  // through the session-keyed lookups. A watch fires on every settings edit, so turning
-  // the path on or off takes effect without a restart.
+  installGlobalReaders(settingsState.value);
   try {
-    setTracePath(settingsState.value?.tracePath ?? '');
-  } catch {
-    // A settings value that cannot be read leaves tracing exactly as it was.
-  }
-  try {
-    setThrottleEnabled(settingsState.value?.throttle ?? DEFAULT_THROTTLE);
-  } catch {
-    // Same: an unreadable value leaves the throttle where it was.
-  }
-  try {
-    const descriptor = settings.describe().find((entry) => entry.ns === SETTINGS_NS);
+    const descriptor = settings.describe().find((entry) => entry.ns === ns);
     settingsState.revision = typeof descriptor?.revision === 'number' ? descriptor.revision : undefined;
     const user = descriptor?.user;
     const section = user !== null && typeof user === 'object' ? user : null;
@@ -1268,4 +1575,22 @@ function reminderMessage(_ratio) {
   });
 }
 
-export default { name, inject, apply, ContextZipSettings, SETTINGS_NS, resolveMode, setEngineClass };
+/**
+ * The default plugin object.
+ *
+ * `Config` has to be HERE, not merely a named export: the Loader normalizes an
+ * ESM module with `exports.default ?? exports`, so once a default object exists
+ * the Loader's `runtime.Config` is read off it and a named `Config` beside it is
+ * never seen. Without this key 0.1.7-alpha.1 has no schema to project and the
+ * plugin gets no row in the settings document at all.
+ */
+export default {
+  name,
+  inject,
+  apply,
+  Config,
+  ContextZipSettings,
+  SETTINGS_NS,
+  resolveMode,
+  setEngineClass,
+};

@@ -2735,8 +2735,15 @@ var DEFAULT_THROTTLE = false;
 var DEFAULT_FALLBACK_AFTER_FAILURES = 5;
 var DEFAULT_REWRITE_ENABLED = false;
 var SETTINGS_NS = "context-zip";
+var VOLATILE_REF = Symbol.for("cosmokit.volatile.write");
+function isConfigReference(value) {
+  return typeof value === "object" && value !== null && VOLATILE_REF in value;
+}
+function configValue(value) {
+  return isConfigReference(value) ? value.get() : value;
+}
 var DEFAULT_ENABLED = false;
-var ContextZipSettings = z.object({
+var settingsFields = {
   enabled: z.boolean().default(DEFAULT_ENABLED).description(
     "Compact new sessions with this plugin: the five-section handoff template plus working notes merged into the summary. Off delegates to the shipped backend."
   ),
@@ -2766,7 +2773,15 @@ var ContextZipSettings = z.object({
   tracePath: z.string().default("").description(
     "Optional file to append one JSON line per history retrieval to. Empty (the default) writes nothing. Use it to see how the retrieval throttle behaves: each line carries the turn, the retrieval number, whether it was a sweep or a read, how many events were new, how many were withheld as already-held, the zero-novelty streak, and whether narrowing is in force. This harness ships no logger exporter, so plugin logs reach only an in-memory buffer; a file is the one place the numbers can actually be read from."
   )
-});
+};
+var ContextZipSettings = z.object(settingsFields);
+function liveField(field) {
+  return typeof field?.volatile === "function" ? field.volatile() : field;
+}
+var CONFIG_IS_LIVE = typeof settingsFields.enabled?.volatile === "function";
+var Config = z.object(
+  Object.fromEntries(Object.entries(settingsFields).map(([key, field]) => [key, liveField(field)]))
+);
 var settingsState = {
   /** Resolved value, or null when no settings provider is composed. */
   value: null,
@@ -2838,7 +2853,7 @@ async function resolveEngineClass() {
   engineClass = redirect.ContextZipEngine ?? redirect.default;
   return engineClass;
 }
-async function apply(ctx) {
+async function apply(ctx, config) {
   const noteStore = new NoteStore();
   const pluginDir = dirname3(dirname3(fileURLToPath2(import.meta.url)));
   const profileBaseUrl = ctx.baseUrl;
@@ -2847,6 +2862,7 @@ async function apply(ctx) {
   let chain = Promise.resolve();
   let scope = null;
   const optionalFibers = [];
+  const settleTimers = /* @__PURE__ */ new Set();
   const whenAvailable = (names, callback) => {
     try {
       optionalFibers.push(ctx.inject(names, callback));
@@ -2899,21 +2915,73 @@ async function apply(ctx) {
       return false;
     }
   };
+  let settingsNs = SETTINGS_NS;
+  if (config !== null && typeof config === "object") {
+    settingsState.value = settingsFromConfig(config);
+    installGlobalReaders(settingsState.value);
+  }
   whenAvailable(["settings"], (scoped) => {
     const settings = scoped.settings;
-    scope = settings.register(SETTINGS_NS, ContextZipSettings, {
-      base: { enabled: DEFAULT_ENABLED, agents: {} },
-      applies: "live"
-    });
     const reportSwitch = (message) => ctx.logger?.info?.(`[context-zip] ${message}`);
-    refreshSettings(scope, settings, reportSwitch);
+    const usesForms = typeof settings.register !== "function";
+    if (!usesForms) {
+      scope = settings.register(SETTINGS_NS, ContextZipSettings, {
+        base: { enabled: DEFAULT_ENABLED, agents: {} },
+        applies: "live"
+      });
+    } else {
+      settingsNs = ctx.fiber?.entry?.options?.id ?? SETTINGS_NS;
+      try {
+        scoped.effect(() => settings.configure({ auto: false }, ctx.fiber));
+      } catch (error) {
+        ctx.logger?.warn?.(`[context-zip] configuring the settings page policy failed: ${String(error)}`);
+      }
+      scope = {
+        // Re-read on every call, so the value is as live as the references are.
+        get: () => settingsFromConfig(config),
+        replace: async (next) => {
+          if (CONFIG_IS_LIVE) {
+            await settings.replace(settingsNs, next);
+            return;
+          }
+          const entry = ctx.fiber?.entry;
+          const editor = ctx.get("configEditor");
+          if (entry === void 0 || editor === void 0) {
+            throw new Error(
+              "this profile cannot store plugin settings: its schemastery has no volatile() fields and no configuration editor is composed"
+            );
+          }
+          await editor.edit(entry, () => ({ ...next }));
+        },
+        // The Loader emits this on the plugin's own fiber once it has committed
+        // new volatile values: the moment every reader has to re-read.
+        watch: (callback) => {
+          ctx.on("loader/volatile-update", () => callback());
+        }
+      };
+    }
+    refreshSettings(scope, settings, settingsNs, usesForms ? void 0 : reportSwitch);
     try {
       scope.watch(() => {
-        refreshSettings(scope, settings, reportSwitch);
+        refreshSettings(scope, settings, settingsNs, reportSwitch);
         refreshRetrievalVisibility();
       });
     } catch (error) {
       ctx.logger?.warn?.(`[context-zip] watching the settings namespace failed: ${String(error)}`);
+    }
+    if (usesForms) {
+      const settle = (attempt) => {
+        const timer = setTimeout(
+          () => {
+            settleTimers.delete(timer);
+            refreshSettings(scope, settings, settingsNs, reportSwitch);
+            if (settingsState.revision === void 0 && attempt < 10) settle(attempt + 1);
+          },
+          attempt === 0 ? 0 : 100
+        );
+        settleTimers.add(timer);
+      };
+      settle(0);
     }
   });
   const sequence = (task) => {
@@ -3158,6 +3226,8 @@ async function apply(ctx) {
     `[context-zip] ready: ${SUMMARY_SOFT_TARGET_TOKENS}/${SUMMARY_HARD_CAP_TOKENS} token handoff summary, ${NOTES_MAX_CHARS3}-character notes, reminder at ${REMINDER_THRESHOLD_PERCENT}%`
   );
   return () => {
+    for (const timer of settleTimers) clearTimeout(timer);
+    settleTimers.clear();
     for (const fiber of optionalFibers) {
       try {
         fiber?.dispose?.();
@@ -3315,23 +3385,47 @@ function effectiveMode(live) {
   };
 }
 var reportedSwitch;
-function refreshSettings(scope, settings, report) {
+function settingsFromConfig(config) {
+  const source = config !== null && typeof config === "object" ? config : {};
+  const read = (key) => configValue(source[key]);
+  const map = (key) => {
+    const value = read(key);
+    return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
+  };
+  return {
+    enabled: read("enabled") === true,
+    agents: map("agents"),
+    retrieval: read("retrieval"),
+    retrievalAgents: map("retrievalAgents"),
+    throttle: read("throttle") === true,
+    fallbackEnabled: read("fallbackEnabled") === true,
+    fallbackAfterFailures: read("fallbackAfterFailures"),
+    rewriteEnabled: read("rewriteEnabled") === true,
+    rewriteProvider: typeof read("rewriteProvider") === "string" ? read("rewriteProvider") : "",
+    rewriteModel: typeof read("rewriteModel") === "string" ? read("rewriteModel") : "",
+    tracePath: typeof read("tracePath") === "string" ? read("tracePath") : ""
+  };
+}
+function installGlobalReaders(value) {
+  try {
+    setTracePath(value?.tracePath ?? "");
+  } catch {
+  }
+  try {
+    setThrottleEnabled(value?.throttle ?? DEFAULT_THROTTLE);
+  } catch {
+  }
+}
+function refreshSettings(scope, settings, ns, report) {
   try {
     settingsState.value = scope.get();
   } catch (error) {
     settingsState.value = null;
     return;
   }
+  installGlobalReaders(settingsState.value);
   try {
-    setTracePath(settingsState.value?.tracePath ?? "");
-  } catch {
-  }
-  try {
-    setThrottleEnabled(settingsState.value?.throttle ?? DEFAULT_THROTTLE);
-  } catch {
-  }
-  try {
-    const descriptor = settings.describe().find((entry) => entry.ns === SETTINGS_NS);
+    const descriptor = settings.describe().find((entry) => entry.ns === ns);
     settingsState.revision = typeof descriptor?.revision === "number" ? descriptor.revision : void 0;
     const user = descriptor?.user;
     const section = user !== null && typeof user === "object" ? user : null;
@@ -3383,8 +3477,19 @@ function reminderMessage(_ratio) {
     source: { kind: "plugin", plugin: "context-zip", form: "notice", summary: "context pressure reminder" }
   });
 }
-var index_default = { name, inject, apply, ContextZipSettings, SETTINGS_NS, resolveMode, setEngineClass };
+var index_default = {
+  name,
+  inject,
+  apply,
+  Config,
+  ContextZipSettings,
+  SETTINGS_NS,
+  resolveMode,
+  setEngineClass
+};
 export {
+  CONFIG_IS_LIVE,
+  Config,
   ContextZipSettings,
   SETTINGS_NS,
   apply,

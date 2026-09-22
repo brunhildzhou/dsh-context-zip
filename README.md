@@ -5,7 +5,7 @@
 [![license](https://img.shields.io/github/license/brunhildzhou/dsh-context-zip)](./LICENSE)
 [![stars](https://img.shields.io/github/stars/brunhildzhou/dsh-context-zip)](https://github.com/brunhildzhou/dsh-context-zip)
 
-**给 DeepSeek Harness（DSH）用的上下文压缩插件：接管宿主自带的压缩摘要器，改成固定五段式交接摘要，被压掉的原文进分段目录、可回查。** 版本 `0.1.2`，MIT 许可。见 [npm 上的 dsh-context-zip](https://www.npmjs.com/package/dsh-context-zip)。[English](./README.en.md)
+**给 DeepSeek Harness（DSH）用的上下文压缩插件：接管宿主自带的压缩摘要器，改成固定五段式交接摘要，被压掉的原文进分段目录、可回查。** 版本 `0.1.3`，MIT 许可。见 [npm 上的 dsh-context-zip](https://www.npmjs.com/package/dsh-context-zip)。[English](./README.en.md)
 
 ## 能力一览
 
@@ -78,7 +78,7 @@ DSH 在上下文接近窗口上限时自动压缩会话。默认实现让模型�
 
 ## 兼容性与边界
 
-- **宿主**：DeepSeek Harness，peer 范围 `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0`；实测通过的是 `0.1.5-rc.2` 与 `0.1.6-alpha.2`，其余 0.1.x 版本未逐一实测。
+- **宿主**：DeepSeek Harness，peer 范围 `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0 || >=0.1.7-alpha.1 <0.2.0-0`；实测通过的是 `0.1.5-rc.2`、`0.1.6-alpha.2` 与 `0.1.7-alpha.1`，其余 0.1.x 版本未逐一实测。
 - **Node.js**：`^22.19.0 || >=24.0.0`（`dsh-context-zip/package.json` 的 `engines`）。
 - **peer 依赖**由 profile 的 `node_modules` 解析，不随本插件安装。
 - **界面语言**中英双语，面板文案两套，键集合一致。

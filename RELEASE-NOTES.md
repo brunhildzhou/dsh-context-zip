@@ -1,9 +1,20 @@
 # 发布说明
 
-**版本**：`0.1.2`
-**日期**：2026.09.22（北京时间）
+**版本**：`0.1.3`
+**日期**：2026.09.23（北京时间）
 **对应内部快照**：`内部开发快照`
 **许可**：MIT
+
+## 0.1.3 改了什么
+
+**适配 DSH `0.1.7-alpha.1` 的新设置子系统（`SettingsForms`）。** 0.1.7 换掉了设置接口：`settings.register`、`installSection`、`get` 一并删除，插件改成把自己的 profile 行当作设置存储，由 Loader 解析后通过 `apply` 的第二个参数交进来，字段标成 `volatile()` 才能进设置文档。
+
+- **老路径原样保留**。`settings.register(SETTINGS_NS, ContextZipSettings, …)` 那一行没动，仍装在 0.1.5/0.1.6 上；用户停在哪条线就还在哪条线。
+- **按特征检测分流**，不按版本号：`usesForms = typeof settings.register !== 'function'`。新路的接线是 `settings.configure({ auto: false }, ctx.fiber)`（插件自带面板，所以不让 harness 再生成一张通用页）、读写走 `settings.replace`、重读挂在 `ctx.on('loader/volatile-update')`。
+- **新增 `Config` 导出**，十一项设置抽成一张 `settingsFields` 表，`ContextZipSettings` 与 `Config` 都由它生成，避免两处默认值和说明漂移。每项用 `liveField()` 逐字段探测 `volatile()` 是否可用（profile 里那份 schemastery 是 3.18.1，没有这个方法；harness 自带的是 3.18.3），并用 `CONFIG_IS_LIVE` 记录本进程能否承载实时配置。`Config` 必须挂在 `default` 导出上，因为 Loader 归一化 ESM 时取 `exports.default ?? exports`，只做具名导出它看不到。
+- **消息来源 kind 自声明**。0.1.7 删掉了通用的 `plugin` kind，改为各生产者自己登记。插件用一段纯类型的 `declare module '@deepseek-ai/dsh-llm'` 把自己的 `kind: 'plugin'` 登记回去，与官方 `dsh-schedule` 同款写法。**零运行时影响**：消息本来就带这个 kind，改的只是类型。
+- **peer 范围补上 0.1.7 预发布版**：原范围 `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0` 按 semver 规则**不覆盖** `0.1.7-alpha.1`（预发布版只被同级或更低的比较器接受），故追加 `|| >=0.1.7-alpha.1 <0.2.0-0`。已用 semver 7.8.5 实测：`0.1.7-alpha.1` 由 false 变 true，其余版本判定不变。
+- **套件**：`--installed` 加 `--deliverable` 一档 **1273** 条全过，与 0.1.2 持平，无回归。
 
 ## 0.1.2 修了什么
 

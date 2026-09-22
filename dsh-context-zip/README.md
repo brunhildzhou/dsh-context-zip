@@ -159,7 +159,8 @@ node install.mjs --profile-dir <profile 目录> --check
 装完需要重启 harness 才会换行生效。
 
 **前提**：`install.mjs` 要从 profile 的解析路径上找到真实的 `@deepseek-ai/dsh-compaction-basic` 才能复制 `base.js`。这个包由 `$DSH_HOME/profiles/node_modules` 这个 fallback 目录提供，而该目录是 harness **首次启动时**才生成的。所以一个从未启动过的全新 profile 装不了，先启动一次或先把 `$DSH_HOME/profiles/node_modules` 准备好。
-- **宿主版本**：实测通过的是 DSH `0.1.5-rc.2` 与 `0.1.6-alpha.2`；`package.json` 里声明接受 `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0`（其余 0.1.x 版本未逐一实测）。
+- **宿主版本**：实测通过的是 DSH `0.1.5-rc.2`、`0.1.6-alpha.2` 与 `0.1.7-alpha.1`；`package.json` 里声明接受 `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0 || >=0.1.7-alpha.1 <0.2.0-0`（其余 0.1.x 版本未逐一实测）。
+- **两条设置接口都支持**：0.1.5/0.1.6 的 `settings.register` 那一路原样保留，0.1.7-alpha.1 换成按 `register` 是否存在做特征检测，新路走 `settings.configure({auto:false})` + `settings.replace` + `loader/volatile-update`。插件同时导出 `Config`（0.1.7 的设置表单 schema）与 `ContextZipSettings`（旧版命名空间 schema）。
 
 ## 构建与测试
 
