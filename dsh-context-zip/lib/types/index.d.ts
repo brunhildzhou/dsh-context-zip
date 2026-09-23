@@ -250,6 +250,48 @@ export declare function effectiveMode(live: any): {
     live: any;
 };
 /**
+ * Pick this plugin's own row out of the configuration editor's read.
+ *
+ * The editor's `configuration()` is where the settings service gets the user
+ * layer in the first place: `describe()` runs each entry's `override` through
+ * the form and reports the result as `user`. Reading the same `override` here
+ * therefore reaches the same stored section without the form, which matters
+ * because that form is exactly what refuses this plugin's row when the
+ * schemastery in the process has no `volatile()`. Rows are matched by
+ * `entry.options.id`, the id `describe()` reports as `ns`.
+ *
+ * The editor is an optional service, so every step of the reach is guarded: a
+ * profile with none composed, or a read that throws, answers `undefined` and
+ * leaves the caller with the all-empty user layer it reported before.
+ *
+ * @param ctx - plugin context.
+ * @param ns - the id `describe()` reports this plugin under.
+ * @returns the row's override, or `undefined` when it cannot be read.
+ */
+export declare function rowOverrideFrom(ctx: any, ns: any): any;
+/**
+ * Work out which settings fields the STORED user section actually names.
+ *
+ * Two sources can carry it, and they agree whenever both exist: the descriptor's
+ * `user` layer, and the configuration editor's `override` for the same row, which
+ * is the input that layer is projected from. The descriptor comes first because
+ * it is the service's own answer; the override is the fallback for a row the
+ * service will not describe at all. The caller passes `undefined` for a source it
+ * could not read, and "neither" answers all-empty, which is what a provider with
+ * no user layer has always reported.
+ *
+ * @param descriptorUser - the `user` layer of the settings descriptor.
+ * @param override - the configuration editor's override for this plugin's row.
+ * @returns the fields the stored user section names.
+ */
+export declare function userLayerFrom(descriptorUser: any, override: any): {
+    rowConfigured: boolean;
+    userEnabled: boolean;
+    userAgents: Set<string>;
+    userRetrieval: boolean;
+    userRetrievalAgents: Set<string>;
+};
+/**
  * The default plugin object.
  *
  * `Config` has to be HERE, not merely a named export: the Loader normalizes an

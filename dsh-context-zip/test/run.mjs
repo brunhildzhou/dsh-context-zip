@@ -121,7 +121,9 @@ const {
   SUMMARY_HEADINGS,
   effectiveMode,
   resolveModeFrom,
+  rowOverrideFrom,
   sessionTitlesFor,
+  userLayerFrom,
   createTitleMemo,
   TITLE_TTL_MS,
   SESSION_KEY,
@@ -3192,6 +3194,49 @@ try {
   // The panel reports the global switch, so the override table must not leak
   // into it; the count is the only thing that crosses over.
   is('an override is counted for the panel hint', effective.overrides, 0);
+
+  // The user layer when `describe()` will not report this plugin's row at all.
+  // That is the whole 0.1.7 line on a schemastery older than the 3.18.3 that
+  // added `volatile()`: the service answers `[]` for every row whose schema has
+  // no volatile field, so the descriptor lookup finds nothing while the profile
+  // row is fully configured. The layer then has to come from the configuration
+  // editor's `override` — the very value the service projects its own `user`
+  // layer from — and `rowConfigured` has to come out true, because that record
+  // is what lets the attention read tell an empty row from one whose settings
+  // are already in place. Without the fallback the second case below reports an
+  // unconfigured row and the panel credits the default for a value the user set.
+  // The third and fourth cases are the ones that must stay empty: no editor
+  // composed at all, and an editor that names no such row.
+  const layerShape = (layer) => ({
+    rowConfigured: layer.rowConfigured,
+    userEnabled: layer.userEnabled,
+    userAgents: [...layer.userAgents].sort(),
+    userRetrieval: layer.userRetrieval,
+    userRetrievalAgents: [...layer.userRetrievalAgents].sort(),
+  });
+  const editorRows = [
+    {
+      entry: { options: { id: 'dsh-context-zip' } },
+      override: { enabled: true, agents: { plan: false }, retrievalAgents: { build: 'none' } },
+    },
+    { entry: { options: { id: 'another-row' } }, override: { enabled: false } },
+  ];
+  const ctxWithEditor = { get: (name) => (name === 'configEditor' ? { configuration: () => editorRows } : undefined) };
+  is(
+    'a row the settings service will not describe takes its user layer from the configuration editor',
+    [
+      layerShape(userLayerFrom({ enabled: false, retrieval: 'off' }, undefined)),
+      layerShape(userLayerFrom(undefined, rowOverrideFrom(ctxWithEditor, 'dsh-context-zip'))),
+      layerShape(userLayerFrom(undefined, rowOverrideFrom({ get: () => undefined }, 'dsh-context-zip'))),
+      layerShape(userLayerFrom(undefined, rowOverrideFrom(ctxWithEditor, 'absent-row'))),
+    ],
+    [
+      { rowConfigured: true, userEnabled: true, userAgents: [], userRetrieval: true, userRetrievalAgents: [] },
+      { rowConfigured: true, userEnabled: true, userAgents: ['plan'], userRetrieval: false, userRetrievalAgents: ['build'] },
+      { rowConfigured: false, userEnabled: false, userAgents: [], userRetrieval: false, userRetrievalAgents: [] },
+      { rowConfigured: false, userEnabled: false, userAgents: [], userRetrieval: false, userRetrievalAgents: [] },
+    ],
+  );
 
   // The mode lookup itself. It is what decides which summarizer a session gets,
   // and it used to be reachable only through module-level state, so nothing

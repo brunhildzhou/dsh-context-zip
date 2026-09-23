@@ -16,7 +16,9 @@ export {
   resolveModeFrom,
   resolveRetrieval,
   resolveRetrievalFrom,
+  rowOverrideFrom,
   sessionTitlesFor,
+  userLayerFrom,
 } from '../src/index.ts';
 export { ContextZipService, exportFileName, registerExportCommand, renderSegmentMarkdown, sortBySeq } from '../src/export.ts';
 export { deriveSegments, deriveTurnStart, segmentForSeq, loadSegments, ownHistoryStart, readSessionEvents, latestContextWindow } from '../src/segments.ts';

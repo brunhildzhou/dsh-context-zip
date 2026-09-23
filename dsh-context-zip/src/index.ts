@@ -757,10 +757,10 @@ export async function apply(ctx, config) {
     // seed read them off the resolved row config — but the revision and the
     // "the user set this" record only exist once the row is describable, and the
     // switch line would otherwise credit the default for a value the user set.
-    refreshSettings(scope, settings, settingsNs, usesForms ? undefined : reportSwitch);
+    refreshSettings(scope, settings, settingsNs, usesForms ? undefined : reportSwitch, ctx);
     try {
       scope.watch(() => {
-        refreshSettings(scope, settings, settingsNs, reportSwitch);
+        refreshSettings(scope, settings, settingsNs, reportSwitch, ctx);
         // A presentation change has to reach sessions that are already open: the
         // restriction is a live mask, not a property frozen at creation.
         refreshRetrievalVisibility();
@@ -776,7 +776,7 @@ export async function apply(ctx, config) {
         const timer = setTimeout(
           () => {
             settleTimers.delete(timer);
-            refreshSettings(scope, settings, settingsNs, reportSwitch);
+            refreshSettings(scope, settings, settingsNs, reportSwitch, ctx);
             if (settingsState.revision === undefined && attempt < 10) settle(attempt + 1);
           },
           attempt === 0 ? 0 : 100,
@@ -1501,6 +1501,73 @@ function installGlobalReaders(value) {
 }
 
 /**
+ * Pick this plugin's own row out of the configuration editor's read.
+ *
+ * The editor's `configuration()` is where the settings service gets the user
+ * layer in the first place: `describe()` runs each entry's `override` through
+ * the form and reports the result as `user`. Reading the same `override` here
+ * therefore reaches the same stored section without the form, which matters
+ * because that form is exactly what refuses this plugin's row when the
+ * schemastery in the process has no `volatile()`. Rows are matched by
+ * `entry.options.id`, the id `describe()` reports as `ns`.
+ *
+ * The editor is an optional service, so every step of the reach is guarded: a
+ * profile with none composed, or a read that throws, answers `undefined` and
+ * leaves the caller with the all-empty user layer it reported before.
+ *
+ * @param ctx - plugin context.
+ * @param ns - the id `describe()` reports this plugin under.
+ * @returns the row's override, or `undefined` when it cannot be read.
+ */
+export function rowOverrideFrom(ctx, ns) {
+  let configuration;
+  try {
+    configuration = ctx?.get?.('configEditor')?.configuration?.();
+  } catch {
+    return undefined;
+  }
+  const rows = Array.isArray(configuration) ? configuration : [];
+  const override = rows.find((item) => item?.entry?.options?.id === ns)?.override;
+  return override !== null && typeof override === 'object' ? override : undefined;
+}
+
+/**
+ * Work out which settings fields the STORED user section actually names.
+ *
+ * Two sources can carry it, and they agree whenever both exist: the descriptor's
+ * `user` layer, and the configuration editor's `override` for the same row, which
+ * is the input that layer is projected from. The descriptor comes first because
+ * it is the service's own answer; the override is the fallback for a row the
+ * service will not describe at all. The caller passes `undefined` for a source it
+ * could not read, and "neither" answers all-empty, which is what a provider with
+ * no user layer has always reported.
+ *
+ * @param descriptorUser - the `user` layer of the settings descriptor.
+ * @param override - the configuration editor's override for this plugin's row.
+ * @returns the fields the stored user section names.
+ */
+export function userLayerFrom(descriptorUser, override) {
+  const section =
+    descriptorUser !== null && typeof descriptorUser === 'object'
+      ? descriptorUser
+      : override !== null && typeof override === 'object'
+        ? override
+        : null;
+  const agents = section !== null && section.agents !== null && typeof section.agents === 'object' ? section.agents : null;
+  const retrievalAgents =
+    section !== null && section.retrievalAgents !== null && typeof section.retrievalAgents === 'object'
+      ? section.retrievalAgents
+      : null;
+  return {
+    rowConfigured: section !== null && Object.keys(section).length > 0,
+    userEnabled: section !== null && Object.hasOwn(section, 'enabled'),
+    userAgents: new Set(agents === null ? [] : Object.keys(agents)),
+    userRetrieval: section !== null && Object.hasOwn(section, 'retrieval'),
+    userRetrievalAgents: new Set(retrievalAgents === null ? [] : Object.keys(retrievalAgents)),
+  };
+}
+
+/**
  * Re-read the settings value and its revision.
  *
  * @param scope - the namespace adapter for the settings source in use.
@@ -1508,8 +1575,10 @@ function installGlobalReaders(value) {
  * @param ns - the key `describe()` reports this plugin under: the registered
  *   namespace on the older line, the profile entry id on the 0.1.7 line.
  * @param report - optional sink for the switch-change line.
+ * @param ctx - plugin context, used only to reach the optional configuration
+ *   editor when the settings service will not describe this row.
  */
-function refreshSettings(scope, settings, ns, report) {
+function refreshSettings(scope, settings, ns, report, ctx) {
   try {
     settingsState.value = scope.get();
   } catch (error) {
@@ -1519,19 +1588,25 @@ function refreshSettings(scope, settings, ns, report) {
   installGlobalReaders(settingsState.value);
   try {
     const descriptor = settings.describe().find((entry) => entry.ns === ns);
+    // Only the descriptor carries a revision: it is the settings service's own
+    // count of writes to this row, and no other reader in the process keeps one.
+    // `undefined` is therefore the honest answer for a row the service will not
+    // describe, and it is what the panel showed before this fallback existed.
     settingsState.revision = typeof descriptor?.revision === 'number' ? descriptor.revision : undefined;
-    const user = descriptor?.user;
-    const section = user !== null && typeof user === 'object' ? user : null;
-    settingsState.rowConfigured = section !== null && Object.keys(section).length > 0;
-    settingsState.userEnabled = section !== null && Object.hasOwn(section, 'enabled');
-    const agents = section !== null && section.agents !== null && typeof section.agents === 'object' ? section.agents : null;
-    settingsState.userAgents = new Set(agents === null ? [] : Object.keys(agents));
-    settingsState.userRetrieval = section !== null && Object.hasOwn(section, 'retrieval');
-    const retrievalAgents =
-      section !== null && section.retrievalAgents !== null && typeof section.retrievalAgents === 'object'
-        ? section.retrievalAgents
-        : null;
-    settingsState.userRetrievalAgents = new Set(retrievalAgents === null ? [] : Object.keys(retrievalAgents));
+    // A row with no live field is dropped WHOLE by the settings service:
+    // `describe()` answers `[]` for an entry whose `volatileForm(schema)` is
+    // undefined, which is this plugin's row on any schemastery older than the
+    // 3.18.3 that added `volatile()`. The user section is not missing from the
+    // profile, only from that one read, so it is taken from the configuration
+    // editor instead — the same source the service projects its own `user` layer
+    // from, so the two agree wherever both are readable.
+    const override = descriptor === undefined ? rowOverrideFrom(ctx, ns) : undefined;
+    const layer = userLayerFrom(descriptor?.user, override);
+    settingsState.rowConfigured = layer.rowConfigured;
+    settingsState.userEnabled = layer.userEnabled;
+    settingsState.userAgents = layer.userAgents;
+    settingsState.userRetrieval = layer.userRetrieval;
+    settingsState.userRetrievalAgents = layer.userRetrievalAgents;
   } catch {
     settingsState.revision = undefined;
     settingsState.rowConfigured = false;

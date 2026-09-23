@@ -3447,6 +3447,29 @@ function effectiveMode(live) {
     live
   };
 }
+function rowOverrideFrom(ctx, ns) {
+  let configuration;
+  try {
+    configuration = ctx?.get?.("configEditor")?.configuration?.();
+  } catch {
+    return void 0;
+  }
+  const rows = Array.isArray(configuration) ? configuration : [];
+  const override = rows.find((item) => item?.entry?.options?.id === ns)?.override;
+  return override !== null && typeof override === "object" ? override : void 0;
+}
+function userLayerFrom(descriptorUser, override) {
+  const section = descriptorUser !== null && typeof descriptorUser === "object" ? descriptorUser : override !== null && typeof override === "object" ? override : null;
+  const agents = section !== null && section.agents !== null && typeof section.agents === "object" ? section.agents : null;
+  const retrievalAgents = section !== null && section.retrievalAgents !== null && typeof section.retrievalAgents === "object" ? section.retrievalAgents : null;
+  return {
+    rowConfigured: section !== null && Object.keys(section).length > 0,
+    userEnabled: section !== null && Object.hasOwn(section, "enabled"),
+    userAgents: new Set(agents === null ? [] : Object.keys(agents)),
+    userRetrieval: section !== null && Object.hasOwn(section, "retrieval"),
+    userRetrievalAgents: new Set(retrievalAgents === null ? [] : Object.keys(retrievalAgents))
+  };
+}
 
 // test/entry.ts
 import { buildSummarizationInstruction, createContextZipEngine, setSharedModeReader as setSharedModeReader2, summarizeTarget, setSharedFallbackReader as setSharedFallbackReader2, resetFailureStreaks, failureCount as failureCount2, isRangeTooSmallFailure as isRangeTooSmallFailure2, buildMechanicalSummary, messageVisibleText as messageVisibleText2 } from "dsh-context-zip/engine";
@@ -3815,6 +3838,7 @@ export {
   resolveRetrievalFrom,
   resolveRewriteRoute,
   rewriteGuardBlocks,
+  rowOverrideFrom,
   rowsAfterSave,
   runRewriteCall,
   sameFileSpelling,
@@ -3840,6 +3864,7 @@ export {
   titlesFrom,
   toRows,
   trimToLimit,
+  userLayerFrom,
   utf8Bytes,
   wireCompactionRow,
   wireFace,

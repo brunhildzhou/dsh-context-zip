@@ -3076,10 +3076,10 @@ async function apply(ctx, config) {
         }
       };
     }
-    refreshSettings(scope, settings, settingsNs, usesForms ? void 0 : reportSwitch);
+    refreshSettings(scope, settings, settingsNs, usesForms ? void 0 : reportSwitch, ctx);
     try {
       scope.watch(() => {
-        refreshSettings(scope, settings, settingsNs, reportSwitch);
+        refreshSettings(scope, settings, settingsNs, reportSwitch, ctx);
         refreshRetrievalVisibility();
       });
     } catch (error) {
@@ -3090,7 +3090,7 @@ async function apply(ctx, config) {
         const timer = setTimeout(
           () => {
             settleTimers.delete(timer);
-            refreshSettings(scope, settings, settingsNs, reportSwitch);
+            refreshSettings(scope, settings, settingsNs, reportSwitch, ctx);
             if (settingsState.revision === void 0 && attempt < 10) settle(attempt + 1);
           },
           attempt === 0 ? 0 : 100
@@ -3550,7 +3550,30 @@ function installGlobalReaders(value) {
   } catch {
   }
 }
-function refreshSettings(scope, settings, ns, report) {
+function rowOverrideFrom(ctx, ns) {
+  let configuration;
+  try {
+    configuration = ctx?.get?.("configEditor")?.configuration?.();
+  } catch {
+    return void 0;
+  }
+  const rows = Array.isArray(configuration) ? configuration : [];
+  const override = rows.find((item) => item?.entry?.options?.id === ns)?.override;
+  return override !== null && typeof override === "object" ? override : void 0;
+}
+function userLayerFrom(descriptorUser, override) {
+  const section = descriptorUser !== null && typeof descriptorUser === "object" ? descriptorUser : override !== null && typeof override === "object" ? override : null;
+  const agents = section !== null && section.agents !== null && typeof section.agents === "object" ? section.agents : null;
+  const retrievalAgents = section !== null && section.retrievalAgents !== null && typeof section.retrievalAgents === "object" ? section.retrievalAgents : null;
+  return {
+    rowConfigured: section !== null && Object.keys(section).length > 0,
+    userEnabled: section !== null && Object.hasOwn(section, "enabled"),
+    userAgents: new Set(agents === null ? [] : Object.keys(agents)),
+    userRetrieval: section !== null && Object.hasOwn(section, "retrieval"),
+    userRetrievalAgents: new Set(retrievalAgents === null ? [] : Object.keys(retrievalAgents))
+  };
+}
+function refreshSettings(scope, settings, ns, report, ctx) {
   try {
     settingsState.value = scope.get();
   } catch (error) {
@@ -3561,15 +3584,13 @@ function refreshSettings(scope, settings, ns, report) {
   try {
     const descriptor = settings.describe().find((entry) => entry.ns === ns);
     settingsState.revision = typeof descriptor?.revision === "number" ? descriptor.revision : void 0;
-    const user = descriptor?.user;
-    const section = user !== null && typeof user === "object" ? user : null;
-    settingsState.rowConfigured = section !== null && Object.keys(section).length > 0;
-    settingsState.userEnabled = section !== null && Object.hasOwn(section, "enabled");
-    const agents = section !== null && section.agents !== null && typeof section.agents === "object" ? section.agents : null;
-    settingsState.userAgents = new Set(agents === null ? [] : Object.keys(agents));
-    settingsState.userRetrieval = section !== null && Object.hasOwn(section, "retrieval");
-    const retrievalAgents = section !== null && section.retrievalAgents !== null && typeof section.retrievalAgents === "object" ? section.retrievalAgents : null;
-    settingsState.userRetrievalAgents = new Set(retrievalAgents === null ? [] : Object.keys(retrievalAgents));
+    const override = descriptor === void 0 ? rowOverrideFrom(ctx, ns) : void 0;
+    const layer = userLayerFrom(descriptor?.user, override);
+    settingsState.rowConfigured = layer.rowConfigured;
+    settingsState.userEnabled = layer.userEnabled;
+    settingsState.userAgents = layer.userAgents;
+    settingsState.userRetrieval = layer.userRetrieval;
+    settingsState.userRetrievalAgents = layer.userRetrievalAgents;
   } catch {
     settingsState.revision = void 0;
     settingsState.rowConfigured = false;
@@ -3638,6 +3659,8 @@ export {
   resolveModeFrom,
   resolveRetrieval,
   resolveRetrievalFrom,
+  rowOverrideFrom,
   sessionTitlesFor,
-  setEngineClass
+  setEngineClass,
+  userLayerFrom
 };

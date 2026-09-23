@@ -1,9 +1,37 @@
 # 发布说明
 
-**版本**：`0.1.6`
+**版本**：`0.1.7`
 **日期**：2026.09.23（北京时间）
 **对应内部快照**：`内部开发快照`
 **许可**：MIT
+
+## 0.1.7 改了什么
+
+**修掉一处设置来源的误报：`schemastery` 停在 3.18.1/3.18.2 的 profile 上，宿主 `settings.describe()` 会把本插件那一行整行丢开，于是 `/live` 的 `source` 把用户设过的值报成 `default`，`rowConfigured` 恒 false——后者在重定向槽位未生效时会把「需要迁移设置」误报出来。同一版给会话格式补了一条防守判据。压缩接管、分段目录、检索工具与设置面板的行为与 0.1.6 相同。**
+
+### 修掉：`/live` 的 `source` 误报 `default`
+
+- **症状**：`schemastery` 是 3.18.1 或 3.18.2 的 profile 上，面板把「接管」那一项的来源标成 `default`，`/live` 载荷里的 `source` 也这么答，而用户明明在设置里开过这一项。
+- **根因**：`source` 由 `settingsState.userEnabled`（连同 `userAgents`、`userRetrieval`、`userRetrievalAgents` 同组记录）决定，这组记录只从 `settings.describe()` 里那一行的 `user` 层投影出来。宿主的 `describe()` 对**没有 volatile 字段的行整行丢弃**，而 `Schema.volatile()` 是 `schemastery` 3.18.3 才加的 API：3.18.1/3.18.2 上这个方法不存在，本插件那一行的 schema 于是一个 volatile 字段都没有，`describe()` 对它答 `[]`。用户段并没有从 profile 里消失，丢的只是那一次读。
+- **连带误报**：`rowConfigured` 同样恒 false，而 `/wire` 的 `readAttention` 正是拿它在状态为 `inactive` 时决定报不报 `migrate`（「设置未迁移」）。一个行配置齐全、只是重定向槽位还没接上的 profile，会被这套读数说成「需要迁移设置」。
+- **修法**：`describe()` 报不出这一行时，改从配置编辑器读同一层——`ctx.get('configEditor').configuration()` 里按 `entry.options.id === ns` 找到本插件那一行，取其 `override`。这份 `override` 正是宿主投影自己 `user` 层的输入，所以两边都能读到时逐字一致；`describe()` 能报出这一行时仍以它为准。编辑器是可选服务，这条读法每一步都带防守：profile 里没有编辑器、或者读一次抛错，都答 `undefined`，`rowConfigured` 与其余记录落回改动前那个「全空」答案。
+- **`revision` 不变**：它是设置服务自己记的写入次数，全进程只有那一处保留，所以报不出这一行时仍是 `undefined`，与这次改动之前一样。
+- **不受影响的**：设置的实际生效值仍走 `scope.get()`，引擎选路与压缩行为都不碰这组记录。
+
+### 新增判据：会话格式的防守
+
+- **为什么**：0.1.4 那条守卫是**文本**的（三个 bundle 里不许出现退役的 `kind: 'plugin'`）。宿主哪天把会话信封里的某个字段改名，文本守卫看不见，插件却会照着旧字段名读出一个错的数。
+- **判据**：`test/fixtures/session-v4-log.json` 是一份冻结的 V4 逻辑会话（`{ header, inheritedEventCount, events }`，字段名全部取自已装包的声明）。先把它交给**宿主自己的** `Session.create` 重建，那是这个格式的准入边界，会校验头部版本、事件信封、seq 连续性、每条消息的来源，以及 `surfaceOp`/`sourceEventSeqs` 描述的表面迁移；再把重建结果喂进插件真实的读取路径与分段目录，比对派生的段号、被替换事件号与摘要事件号。
+- **失败面**：宿主改了信封或头部，`Session.create` 直接抛；宿主改了它自己不做 schema 校验的载荷字段，重建照样成功而派生出来的数字不对。两条路都让这一条变红，插件不会静默去读一个它已经不认识的格式。
+- **宿主从哪来**：`--installed` 点名了插件目录时，宿主包从那棵目录解析，读到的就是 profile 实际加载的那一份；fixture 始终读本仓库这一份，因为冻结的期望是本仓库的。
+
+### 文档口径
+
+- 套件 **1358 → 1360**（`--installed` 加 `--deliverable` 一档）。新增的两条是会话格式那一条与这次 `source` 修复的回归判据。
+- 文档里不可复现的条数换成实测值：`README.md`、`README.en.md`、`dsh-context-zip/README.md` 与 `docs/功能文档.md` 两处的 `1358`，`docs/局限性与已知问题.md`、`evidence/验收台账.md` 的同一口径，都改成 `1360`；`evidence/套件说明.md` 的 `1359` 改成 `1360`。
+- 交付树自己当运行主体时（不带开发依赖）：不接 `--deliverable` 是 **1346** 条总数，接上 `--deliverable .` 是 **1356** 条总数，唯一失败仍是按设计的 `typescript` 探针那一条（`build exit code: typescript is reachable for the third case`）。镜像树实测同数。
+
+**套件**：`--installed` 加 `--deliverable` 一档 **1360** 条全过，`tsc --noEmit` 零错误。
 
 ## 0.1.6 改了什么
 
