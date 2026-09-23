@@ -19,6 +19,7 @@
 import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -432,6 +433,114 @@ async function checkProducerKind(pluginRoot, label = 'producer kind') {
     /kind:\s*PRODUCER_KIND[^}]*context pressure reminder/.test(bundled),
     true,
   );
+}
+
+/**
+ * One verdict on the frozen V4 session fixture.
+ *
+ * `test/fixtures/session-v4-log.json` is a V4 logical session artifact — the
+ * `{ header, inheritedEventCount, events }` shape `@deepseek-ai/dsh-session-format`
+ * defines for a decoded log, with every field name taken from the installed
+ * packages' own declarations. It is fed to the host's OWN reader, `Session.create`,
+ * which is the admission boundary for that format: it validates the header
+ * version, the event envelope, seq contiguity, every message source, and the
+ * surface transitions `surfaceOp`/`sourceEventSeqs` describe. Its output then
+ * goes through this plugin's real read path and segment directory.
+ *
+ * That pins both halves of the format in one place. A host change to the envelope,
+ * the header, or the surface mechanism makes `Session.create` throw; a payload
+ * change the host does not schema-check — a renamed `shadowedSeqs`, say — leaves
+ * the rebuild succeeding and the derived numbers wrong. Either way this check
+ * goes red instead of the plugin silently reading a format it no longer knows.
+ *
+ * The host package is resolved from the installed plugin's own directory when
+ * `--installed` named one, so the reader is the copy the profile actually loads.
+ * The fixture is read from this repository, because the frozen expectation is
+ * this repository's.
+ *
+ * @returns `{ ok, detail }`; `detail` names the first disagreement when `ok` is
+ *   false.
+ */
+async function sessionFormatVerdict() {
+  const anchor = installedPluginDirectory() ?? resolve(here, '..');
+  let Session;
+  try {
+    const hostRequire = createRequire(join(anchor, 'package.json'));
+    ({ Session } = await import(pathToFileURL(hostRequire.resolve('@deepseek-ai/dsh-session')).href));
+  } catch (error) {
+    return { ok: false, detail: `the host session package is not resolvable from ${anchor}: ${String(error.message)}` };
+  }
+
+  let fixture;
+  try {
+    fixture = JSON.parse(await readFile(join(here, 'fixtures', 'session-v4-log.json'), 'utf8'));
+  } catch (error) {
+    return { ok: false, detail: `the session fixture is unreadable: ${String(error.message)}` };
+  }
+
+  let rebuilt;
+  try {
+    rebuilt = Session.create(fixture.header.id, fixture.events, fixture.header, fixture.inheritedEventCount);
+  } catch (error) {
+    return { ok: false, detail: `the host refused to rebuild the fixture: ${String(error.message)}` };
+  }
+
+  const events = await readSessionEvents({}, rebuilt);
+  const segments = deriveSegments(rebuilt, events);
+
+  const wantSegments = [
+    { ordinal: 0, compactionId: 'compaction-a', summarySeq: 3, shadowedRange: { start: 0, end: 1 }, shadowedSeqs: [0, 1], tokenCount: 111 },
+    { ordinal: 1, compactionId: 'compaction-b', summarySeq: 11, shadowedRange: { start: 4, end: 9 }, shadowedSeqs: [4, 6, 7, 8, 9], tokenCount: 222 },
+  ];
+  const gotSegments = segments.map(({ ordinal, compactionId, summarySeq, shadowedRange, shadowedSeqs, tokenCount }) => (
+    { ordinal, compactionId, summarySeq, shadowedRange, shadowedSeqs, tokenCount }
+  ));
+  if (JSON.stringify(gotSegments) !== JSON.stringify(wantSegments)) {
+    return {
+      ok: false,
+      detail: `the segment directory no longer matches the fixture\n     expected ${JSON.stringify(wantSegments)}\n     actual   ${JSON.stringify(gotSegments)}`,
+    };
+  }
+
+  // Reading one original back has to go through the segment number, so the lookup
+  // is checked on its own: every seq the fixture compacted must land in its segment.
+  const wantOwner = { 0: 0, 1: 0, 4: 1, 6: 1, 7: 1, 8: 1, 9: 1 };
+  const gotOwner = {};
+  for (const seq of Object.keys(wantOwner)) {
+    const segment = segmentForSeq(segments, Number(seq));
+    gotOwner[seq] = segment === null ? null : segment.ordinal;
+  }
+  if (JSON.stringify(gotOwner) !== JSON.stringify(wantOwner)) {
+    return {
+      ok: false,
+      detail: `a compacted seq no longer resolves to its segment\n     expected ${JSON.stringify(wantOwner)}\n     actual   ${JSON.stringify(gotOwner)}`,
+    };
+  }
+
+  const bySeq = new Map(events.map((event) => [event.seq, event]));
+  const wantText = {
+    0: '#0 user/message\n  alpha question: the first prompt\n#1 assistant/message\n  alpha answer: the first reply',
+    1: [
+      '#4 user/message\n  Summary A: the first exchange was compacted.',
+      '#6 user/message\n  beta question: the second prompt',
+      '#7 assistant/message\n  beta answer: the second reply',
+      '#8 user/message\n  gamma question: the third prompt',
+      '#9 assistant/message\n  gamma answer: the third reply',
+    ].join('\n'),
+  };
+  const gotText = {};
+  for (const segment of segments) {
+    const shadowed = segment.shadowedSeqs.map((seq) => bySeq.get(seq));
+    gotText[segment.ordinal] = renderTranscript(shadowed, 10_000).text;
+  }
+  if (JSON.stringify(gotText) !== JSON.stringify(wantText)) {
+    return {
+      ok: false,
+      detail: `the compacted originals no longer read back by segment number\n     expected ${JSON.stringify(wantText)}\n     actual   ${JSON.stringify(gotText)}`,
+    };
+  }
+
+  return { ok: true, detail: '' };
 }
 
 const root = await mkdtemp(join(tmpdir(), 'context-zip-test-'));
@@ -7861,6 +7970,20 @@ try {
 
   await checkDeclaredTypes(resolve(here, '..'));
   await checkProducerKind(resolve(here, '..'));
+
+  // The format-layer guard: a frozen V4 log rebuilt through the host's own reader.
+  // The textual guard above cannot see a field the host renames; this one can,
+  // because it asserts the numbers the plugin derives from those fields.
+  let sessionFormat;
+  try {
+    sessionFormat = await sessionFormatVerdict();
+  } catch (error) {
+    // A guard that crashed the run would take every later check down with it and
+    // report a stack trace instead of a named failure, so it fails as a check.
+    sessionFormat = { ok: false, detail: `the session-format guard itself threw: ${String(error.message)}` };
+  }
+  ok('session format v4: the host reader rebuilds the frozen fixture into the expected segments', sessionFormat.ok);
+  if (!sessionFormat.ok) failures.push(`  ${sessionFormat.detail}`);
 
   // The delivered tree makes the same promise and is the copy that actually ships,
   // so it gets the same guard pointed at it whenever the pipeline names one.
