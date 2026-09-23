@@ -81,6 +81,7 @@ DSH 在上下文接近窗口上限时自动压缩会话。默认实现让模型�
 - **宿主**：DeepSeek Harness，peer 范围 `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0 || >=0.1.7-alpha.1 <0.2.0-0`；实测通过的是 `0.1.5-rc.2`、`0.1.6-alpha.2` 与 `0.1.7-alpha.1`，其余 0.1.x 版本未逐一实测。
 - **Node.js**：`^22.19.0 || >=24.0.0`（`dsh-context-zip/package.json` 的 `engines`）。
 - **peer 依赖**由 profile 的 `node_modules` 解析，不随本插件安装。
+- **`@deepseek-ai/schemastery`**：peer 下限 `^3.18.1`，取的是已知能跑的最低版本。`Schema.volatile()` 是 3.18.3 才有的 API，低于它的版本上插件照常压缩、照常读写行配置，只是设置页不会生成表单、设置写入走插件面板的配置编辑器；想要那张自动表单，需要 profile 那份 schemastery 升到 3.18.3。
 - **界面语言**中英双语，面板文案两套，键集合一致。
 - **只支持 DSH**，不能独立运行。
 - `redirect/` 是本地重定向包，沿用 `@deepseek-ai/dsh-compaction-basic` 包名把调用接到本插件。它不是官方包（`private: true`），安装器拒绝覆盖真实包。
