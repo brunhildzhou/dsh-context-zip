@@ -1,341 +1,117 @@
 # dsh-context-zip
 
-一个给 DeepSeek Harness 用的上下文压缩插件。它替换掉自带的压缩摘要器，改成五段式交接摘要，并把每次压缩掉的内容做成可回查的分段目录。
+[![npm version](https://img.shields.io/npm/v/dsh-context-zip)](https://www.npmjs.com/package/dsh-context-zip)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-context-zip)](https://www.npmjs.com/package/dsh-context-zip)
+[![license](https://img.shields.io/github/license/brunhildzhou/dsh-context-zip)](./LICENSE)
+[![stars](https://img.shields.io/github/stars/brunhildzhou/dsh-context-zip)](https://github.com/brunhildzhou/dsh-context-zip)
 
-## 快速开始
+**给 DeepSeek Harness（DSH）用的上下文压缩插件：接管宿主自带的压缩摘要器，改成固定五段式交接摘要，被压掉的原文进分段目录、可回查。** 版本 `0.1.5`，MIT 许可。见 [npm 上的 dsh-context-zip](https://www.npmjs.com/package/dsh-context-zip)。[English](https://github.com/brunhildzhou/dsh-context-zip/blob/main/README.en.md)
+
+## 能力一览
+
+- **五段式交接摘要**：压缩那一步改走本插件，摘要按 `Goal and intent`、`Decisions`、`Current state`、`Next steps`、`Anchors` 五段产出。
+- **原文可回查**：每次压缩记一段，段号、被替换的事件号、摘要事件号都能列出来，原文按段号或事件号读回。
+- **检索工具与导出**：`history_segments`、`history_read`、`history_search`、`history_find` 只读本会话历史，另有只读服务与 `/zip-export` 导出。
+- **可选能力**：模型工作笔记、机械摘要兜底、散文摘要排版重排，默认都是关的；一个设置面板控制以上全部。
+
+## 安装与升级
+
+两条路，任选一条。
+
+**路 A：从 npm 装。** 装完能启动、面板能打开，但压缩不生效（缺行重定向）。补法：设置面板 ContextZip 一节里，点「压缩后端」那一行右端的「接管」，然后重启 harness 一次。
 
 ```bash
-# 前提：这个 profile 至少启动过一次（宿主包在首次启动时才生成）
-node install.mjs --profile-dir <harness home>/profiles/web
-# 装完重启 harness 才生效；卸载用 --uninstall，连插件数据一起清用 --purge
+dsh plugin --profile web add dsh-context-zip
 ```
 
-**`dsh plugin add` 可以装，装上也能启动，但压缩不会生效。** 它只装插件本体，缺「行重定向」那一件，于是压缩那一行仍解析到内置后端。用上面那条命令，或启动后在设置面板的 ContextZip 一栏点「接管」补上，再重启 harness。原理与全部参数见下面「安装」一节。
+升级把版本换掉再跑一次：
 
-
-## 它做什么
-
-- **五段式摘要**：压缩时不再让模型自由发挥，而是按 `Goal and intent` / `Decisions` / `Current state` / `Next steps` / `Anchors` 五段产出。软目标 3072 token，硬上限 6144。
-- **分段目录**：每次压缩产生一段。段号、被替换的事件号、摘要事件号都从会话日志现算，不落盘、不做第二份事实来源。
-- **回查工具**：`history_segments` 列目录，`history_read` 按段号或事件号读回原文，`history_search` 走会话查询的全文索引、带游标翻页。搜索的上界是「请求这次搜索的那条助手消息之前」，所以一次搜索永远不会匹配到它自己，也不会匹配当前这一步的推理；它查的是已经落进会话的历史。
-- **取出通道**：只读服务 `contextZip`，加一条 `/zip-export <会话号>` 命令（省略参数就是当前会话），把分段导成 Markdown。
-- **问起才承认**：用户明确问「前面的内容是不是被丢了」时用一句固定话术承认并指向回查入口；模型不主动提。
-- **工作笔记（默认关）**：开启后模型可以用 `notes_write` 记下意图和决定，用 `notes_read` / `notes_search` 读回草稿与归档，下一次压缩会把这份草稿作为「意图材料」喂给摘要器。摘要仍是唯一权威，事实以历史为准，意图以笔记为准。达到上下文的 75% 会提醒一次。
-- **只读自己**：主模型和子智能体都能回查，但只能查自己的历史，不跨会话、不跨智能体。
-
-## 目录结构
-
-这是两件，必须一起装才能生效（压缩引擎在插件本体包内，不是独立的第三件）：
-
-| 目录 | 包名 | 作用 |
-|---|---|---|
-| `.` | `dsh-context-zip` | 插件本体：工具、设置面板、HTTP 路由，压缩引擎在包内 `engine/` |
-| `engine/` | `dsh-context-zip/engine`（包内子路径，不是独立包） | 压缩后端：继承自带后端，只覆盖摘要那一个钩子 |
-| `redirect/` | `@deepseek-ai/dsh-compaction-basic` | 行重定向：让 `compaction-basic` 那一行解析到本插件 |
-
-拆成两件是被 harness 的机制逼出来的：引擎留在插件包内，插件单独装上就能启动，不必再依赖第二个包；重定向则必须单独放一个同名的本地包，原因见下一节。
-
-## 为什么需要 `redirect/`，以及挂载靠什么
-
-两件事要分开看。
-
-**挂载插件本体**靠本插件的 `cordis.patch.yml`，里面一条 `insert`，让 `dsh-context-zip` 成为一行。这一步不能省：bundle patch 是唯一能挂载插件包的机制，patch 是空列表就等于什么都没挂——`apply()` 不跑，工具、路由、笔记、常驻引导、提醒全都不会出现。
-
-**顶替 `compaction-basic` 那一行**靠 `redirect/`。`compaction` 是单槽服务，加载两个实现会直接报错，所以本插件必须顶替自带的 `compaction-basic` 那一行，而不是并排再加一行。但 `cordis-plugin-include` 把行里的 `name` 当作**校验值**而不是可覆盖值：它拿 `name` 和下一层传来的值比对，不一致就跳过并告警。所以任何 bundle 的 patch 都改不了某一行的 `name`。
-
-可行做法是让那个包名解析到本插件的引擎，也就是 `redirect/` 这个同名的本地包。行的裸包名由 Node 从**根组合的 baseUrl** 解析，也就是 profile 目录；profile 的 `node_modules` 因此排在 harness 安装之前，profile 本地的同名包就是答案。
-
-`install.mjs` 会从当前安装里复制一份真实的 `base.js` 放进 `redirect/`，于是 `redirect/index.js` 可以继承自带后端而不产生循环依赖。**引擎本身不 import 那个被顶替的包名**，它通过工厂函数接收基类，这是这次拆分的关键。
-
-## 压缩模式的按会话切换
-
-装好之后，这个插件**接管** `compaction-basic` 那一行，但接管不等于强迫所有会话都用它压。设置里那个开关的语义是「新建会话用哪种压缩」：
-
-| 开关 | 这个会话怎么压 |
-|---|---|
-| 开 | 本插件的五段式交接摘要，工作笔记并入摘要，生成上限 6144 |
-| 关 | 交回内置后端，用它自己的摘要写法，生成上限 8192 |
-
-选哪一段压、保留多少尾巴、超限怎么重试、日志怎么写、锁怎么加，两种模式完全一样。差别只在摘要那一步的措辞和笔记。所以「关」不是关掉功能，是把这一步交还给原厂。
-
-**这个开关管到哪、管不到哪。** 管：自动压缩那一步用哪套摘要（上表）。不管：`/zip-compact` 命令，它始终可用，裸发只报计划、加 `--yes` 才动手，是插件本身出问题时的手动出口。所以「关」不等于「关掉这个插件」；关着敲 `/zip-compact --yes` 仍会压缩，只是那一次的摘要由内置后端写。逐条范围与代码位置见 `2026.09.18-dsh-context-zip功能文档.md` §十。
-
-分流的判定点是 `summarize()`，它每次都能拿到 agent，所以**同一个进程里两个会话可以压得不一样**。
-
-配置分两层：
-
-```yaml
-context-zip:
-  enabled: true          # 新会话的默认
-  agents:                # 覆盖表，键是 agent 预设名或会话号
-    standard: false      # 用 standard 预设的会话改走内置后端
+```bash
+dsh plugin --profile web add dsh-context-zip@<版本>
 ```
 
-查表的顺序是**先会话号，后预设名**。这个顺序不能反过来：预设名那一档会命中该预设下的每一个会话，会话号那一档是唯一能把某个会话从它的同门里单独拎出来的键，所以预设行绝不能盖住它。会话号是生成的、不复用的，一行遗留的会话号记录不会漏到别的会话上。
+实测事实：pnpm 不会清掉重定向，所以接管只需做一次，之后升级不用重新接管。
 
-模式是**实时读的**，不在会话创建时冻结。所以：
-
-- 改设置会立刻影响已经开着的会话，下一次压缩就按新设置走，不需要重启，也不需要重开会话。
-- 同一进程里的两个会话可以压得不一样：把其中一个的会话号填进覆盖表，它就单独换一种压法。
-- 一个会话的模式不是一个它随身携带的属性，而是「你问的那一刻设置是什么」的函数。它在两次压缩之间是可以变的。
-
-## 输入框那一排的压缩方式开关
-
-装好之后，输入框左下角那一排（`+`、回形针、权限选择器旁边）会多一个小芯片。它显示**当前这个会话下一次压缩会用哪个后端**，点一下就能换。
-
-- **灰的、旋钮在左**：内置后端。旋钮里是两条相对的箭头，表示上下文被压掉。
-- **蓝的、旋钮在右**：本插件。旋钮里是一枚书签，表示压掉的原文还留着、能按事件号读回。
-
-鼠标悬停出提示，两句话分别说清「这个控件管什么」和「现在是什么」。提示里特意写了「当前会话的下一次压缩就生效，不用重启」：模式是实时读的，不写这句用户会以为要新开会话。
-
-点一下写的是**会话号**那一行覆盖，也就是上表里唯一能把一个会话从它的同门中单独拎出来的键：
-
-```yaml
-context-zip:
-  agents:
-    session-<示例>: true
-```
-
-组件在 `client/index.ts`，注册进 `conversation.input.left`（一个 list 槽位，所以它跟同一位置的其它东西并排，不抢占）。这个槽位在会话没绑定时整个不渲染。
-
-**它不自己算模式。** 浏览器半边每次切会话都去问宿主新增的只读路由 `GET /dsh-context-zip/mode?sessionId=…`，那条路由调的是引擎每次压缩前调的同一个 `resolveMode()`。在浏览器里重算一遍要在客户端复刻「会话号优先于预设名」这条顺序和三档回落，早晚会跟引擎说的不一样。指示器一旦跟实际行为不一致，就比没有指示器更糟。
-
-已知边界：那条路由只认**本进程持有的会话**，拿不到就答 404，开关显示成暗红色且不可点。正常的 GUI 会话都在同一个进程里，所以只有页面留着一个服务重启前的旧会话号时才会看到这个状态。
-
-## 安装
+**路 B：从源码检出装。** 一步装好本体与重定向。profile 至少启动过一次，再跑：
 
 ```bash
 node install.mjs --profile-dir <profile 目录>
 ```
 
-例如：
+例如 `node install.mjs --profile-dir <harness home>/profiles/web`。完整参数、卸载与回滚见 `docs/安装与卸载.md`。
 
-```bash
-node install.mjs --profile-dir <harness home>/profiles/web
+## 它接管的是哪一步
+
+DSH 在上下文接近窗口上限时自动压缩会话。默认实现让模型自由写一段摘要，原文之后难找。本插件把这一行替换掉：
+
+```
+自动压缩触发
+  │
+  ├─ 未接管：内置后端写自由摘要，原文难回查
+  │
+  └─ 已接管：本插件写五段交接摘要
+        ├─ 摘要落盘（压缩后唯一的权威）
+        └─ 原文进分段目录（按段号 / 事件号回查）
 ```
 
-**`dsh plugin add dsh-context-zip` 也能装，但它只装插件本体。** 插件随即能启动、设置面板也能打开，**压缩不会生效**：缺的是「行重定向」那一件，压缩那一行仍解析到内置后端。补上这一步在设置面板里——ContextZip 一栏「压缩后端」那一行的主行写「未生效」、副行写「内置压缩正在工作」，点右端的「接管」，它把重定向写进 profile 的 `node_modules/@deepseek-ai/dsh-compaction-basic/`，用的是与 `install.mjs` 同一套文件、同一套守卫（目标必须落在 profile 内、被别人的真包占着就拒绝覆盖）。成功之后主行改成「等待重启」、副行写「下次启动时生效」（接线是在这次启动之后写进去的，重定向的戳因此比本进程启动时间新，要让重定向真正被加载一次）；重启之后才变「已生效」；重启必须由用户手动做，插件不会从进程内重启。状态读不到时主行写「状态未知」、副行写「刚才没有读到」，不会假装未生效。安装参数与 home 推导的完整说明见发布包 `docs/安装与卸载.md`。
+接管是逐行替换，不是并行挂载。插件不修改 DSH 自身代码，不往会话日志写任何事件。
 
-卸载：
+## 能力表格
 
-```bash
-node install.mjs --profile-dir <profile 目录> --uninstall   # 保留插件数据
-node install.mjs --profile-dir <profile 目录> --purge       # 连插件数据一起清
-node install.mjs --profile-dir <profile 目录> --uninstall --home <harness home>   # 形状不标准时手工指定
-node install.mjs --profile-dir <profile 目录> --purge --home <harness home> --yes-unnamed-home   # 形状认不出时，确认就删这个 home
-```
-
-`--uninstall` 只清 profile 那一侧（两个目录加 bundle 清单里的一行），并把保留了什么打在屏幕上：`<harness home>/context-zip/` 下的笔记、模式记录、导出，以及 `settings.yaml` 里的 `context-zip:` 命名空间。`--purge` 连前者一起删；后者没有删除接口，只能手工清。
-
-**卸载合同，明确写死：**
-
-| 动作 | profile 里的包 | `<harness home>/context-zip/` | `settings.yaml` 的 `context-zip:` 段 |
-|---|---|---|---|
-| `--uninstall` | 删 | 保留 | 保留 |
-| `--purge` | 删 | **删** | 保留 |
-
-保留设置段是刻意的：重装之后接着用，不用重新配一遍。没有删除接口，要清只能手工改 `settings.yaml`，脚本会把这句话打在屏幕上。
-
-**哪个 home 由 `--profile-dir` 决定，不由 `DSH_HOME` 决定。** 隔离测试时这两个天然不是同一个目录，跟着环境变量走会把 `--purge` 落到别人的 home 上、删掉别人的笔记，而被卸载的 profile 自己那份反而原封不动。所以：home 从 `--profile-dir` 推导，**两条线索按顺序用**——先看 profile 真实路径往上两级的目录名是不是 `profiles`（`<home>/profiles/<name>`），那里推不出来时看**调用者写的那个形状**：`<home>/profiles/<name>` 里的 `<home>` 就是一个能跑到这个 profile 的 home，因为 harness 解析 profile 走的是词法路径（`join(resolveDshHome(), 'profiles', name)`，全程不 realpath），所以 `<home>/context-zip` 正是那样一次运行会用的数据目录。两条线索都不成立时：`--uninstall` 不给 `--home` 就**拒绝执行**而不是猜（数据一个字节都不动）；`--purge` 则要求 `--home <dir>` 与 `--yes-unnamed-home` **同时**给出，缺一个都拒绝。`DSH_HOME` 与推导结果不一致时**把两者都打印出来**再按推导结果走。要手工指定用 `--home <dir>`，它只在两条线索都推不出来时才是答案。
-
-**`--home` 不再能对 `--purge` 指到别人家。** 只要 home 推得出来（含上面第二条：`profiles` 这层是软链、软链目标目录名不是 `profiles` 也算），`--purge` 删的就是**推导出的那个 home** 名下的 `context-zip/`；此时 `--home` 归一化后与它不同就直接**拒绝执行**，报错点名两边分别是哪个目录，并给出该删哪个。判据不再是「`--home` 名下此刻有没有 `context-zip/`」——那只是一个瞬间的文件系统事实，不能拿来给一次递归删除背书。只有 home 彻底推不出来时，`--home` 才是唯一答案，而且此时 `--purge` 还要过下面那道确认。`--uninstall` 不删数据，但它的报告（包括那句「re-run with --purge to remove …」）与 `--purge` 用**同一个**推导结果，不会出现「报告说一个 home、删的是另一个」。`--home` 与推导结果不同又没带 `--purge` 时，脚本会打一行说明它在这里不决定任何事。
-
-**形状认不出 + `--purge`：要显式确认一次（`--yes-unnamed-home`）。** 触发条件是两条同时成立：**两条 home 推导线索都推不出**（路径既不是 `<home>/profiles/<name>`，canonical 路径里也没有一层叫 `profiles`），**且**本次是 `--purge`。此时不带这个开关就**拒绝执行**（退出码非 0），报错把三件事写清：为什么拒绝（形状认不出，`--home` 没有任何推导结果背书）、它会删什么（`<你给的 --home>/context-zip`，**递归删除**，里面是笔记与导出）、下一步怎么做（补上 `--yes-unnamed-home`）。拒绝发生在**任何删除之前**，所以被拒时 profile 里的包目录也原封不动，补上开关重跑才算数。只给开关不给 `--home` 同样拒绝：开关只能确认一个由 `--home` 指名的 home，不能替它命名。带上开关后照 `--home` 删，并照旧打印 `note … so --home X is used as given`。形状能推出 home 时（正常布局、`profiles` 是软链的 L 布局）以及 `--uninstall`，这个开关**不参与判据**，不带也照旧；它也不会解锁上一条那个「`--home` 指到别人家」的守卫。
-
-**写删一律先确认落在 profile 内。** 软链对读写方是透明的：`cp`、`writeFile` 会跟过去，递归 `rm` 会在软链指向的地方删，而 profile 里「某个包名是软链」是常见布局。现在的做法是先把 `<profile>/node_modules` 的真实路径解析一次并通过守卫（**一次判定覆盖整棵子树**：逐条路径各自 realpath 不构成闭包，`node_modules` 指外、里面两个包名指回 profile 内就能骗过每一条），之后所有安装目标都相对这个真实路径拼，并在落地前把**已有的那一段逐级展开**再确认不会指到 profile 外；`<profile>/package.json` 这个文件单独查（它可能自己就是一条指到外面的软链）；卸载分支对 plugin、engine、redirect 三个目录逐个查；`--purge` 的 `context-zip/` 走上面那条 home 判据。拒绝发生在任何写入或删除之前，报错会点名是哪条路径、展开到哪里、以及改法。合法的软链布局（指向 profile 内的包软链、`node_modules` 本身指到 profile 内的 `vendor/`、profile 目录自身是软链）照常安装。
-
-**会话日志从来不在卸载范围内**，因为这个插件一个日志事件都没写过，所以卸载不可能弄坏任何会话。
-
-升级 harness 之后检查重定向有没有落后：
-
-```bash
-node install.mjs --profile-dir <profile 目录> --check
-```
-
-`redirect/base.js` 是安装那一刻从内置后端复制的快照。升级 harness 会换掉内置后端，而这个副本不会自己更新，插件会继续按旧后端的逻辑压。`--check` 把副本里的版本戳和今天解析到的版本比一下，落后就报 STALE 并以退出码 1 结束。
-
-脚本做三件事，都是纯文件复制，删掉两个目录就完全回退：把插件本体（连包内的引擎）与行重定向复制进 profile 的 `node_modules`，把 `dsh-context-zip` 加进 profile 的 `dsh.profile.bundles`，并把真实后端的入口复制成 `redirect/base.js`。
-
-装完需要重启 harness 才会换行生效。
-
-**前提**：`install.mjs` 要从 profile 的解析路径上找到真实的 `@deepseek-ai/dsh-compaction-basic` 才能复制 `base.js`。这个包由 `$DSH_HOME/profiles/node_modules` 这个 fallback 目录提供，而该目录是 harness **首次启动时**才生成的。所以一个从未启动过的全新 profile 装不了，先启动一次或先把 `$DSH_HOME/profiles/node_modules` 准备好。
-- **宿主版本**：实测通过的是 DSH `0.1.5-rc.2`、`0.1.6-alpha.2` 与 `0.1.7-alpha.1`；`package.json` 里声明接受 `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0 || >=0.1.7-alpha.1 <0.2.0-0`（其余 0.1.x 版本未逐一实测）。
-- **两条设置接口都支持**：0.1.5/0.1.6 的 `settings.register` 那一路原样保留，0.1.7-alpha.1 换成按 `register` 是否存在做特征检测，新路走 `settings.configure({auto:false})` + `settings.replace` + `loader/volatile-update`。插件同时导出 `Config`（0.1.7 的设置表单 schema）与 `ContextZipSettings`（旧版命名空间 schema）。
-
-## 构建与测试
-
-```bash
-npm run check                               # 构建 + 类型检查 + 语法检查
-node test/run.mjs --installed <插件安装目录>  # 跑运行时检查
-```
-
-`npm run check` 串起三件事：`node build.mjs`、`tsc --noEmit`、以及两个产物的 `node --check`。类型检查当前是 `strict: false`（这份代码是 JS 风格的 TS，没有类型标注），但模块解析、参数个数、属性存在性这些真实错误都会被抓到。
-
-先装一次开发依赖（esbuild、typescript、`@types/node`）：
-
-```bash
-npm install
-```
-
-`build.mjs` 需要 esbuild。它先找本目录的 `node_modules/esbuild`，找不到就退到 npm 缓存里的 `npx` 副本。
-
-`typescript` 与 `@types/node` 只服务 `npm run typecheck`。类型检查必须能解析 `@deepseek-ai/*`，这些包由 `peerDependencies` 在 `npm install` 时一并装上；`tsconfig.json` 里的 `paths` 把 `dsh-context-zip/engine` 指回仓库内的 `engine/*.ts`，所以检查的是源码而不是构建产物。
-
-引擎就在插件本体包内，插件与重定向都通过包自身的 `dsh-context-zip/engine` 子路径引用它，所以进程里一定是同一份；构建时这个说明符保持 external，不内联。
-
-**引擎按外部依赖构建**（和 `@deepseek-ai/*` 一样，不 inline 进插件产物）。重定向那一行和插件本体都解析同一份引擎，进程里因此只有一个引擎模块，插件注册的模块级 notes 读取器就是被挂载的那个引擎读到的那个。把引擎 inline 进来会让插件带上第二份私有副本，两份模块状态互不可见，插件写给引擎的东西引擎永远收不到。
-
-`test/run.mjs` 检查的是**构建产物**而不是 TypeScript 源码，所以打包出错也会被测出来。共 1130 项（同时给出 `--installed` 与 `--deliverable` 两个参数时的数；不接 `--deliverable` 时是 1127 项），覆盖：分叉会话的段号是否只数自己的压缩、段号与摘要事件号的对应、按事件号找所属段、三种消息载荷（用户消息、助手消息、工具结果）的转写投影、转写超预算的截断标记、分叉划界的三种来源优先级、笔记关键词搜索的逐词有序匹配与预算、导出命令的注册形状与参数默认、导出文档的文件名与元信息字段与原文排序、模式查表的两级优先级与来源判定、按会话分流的四条路径（默认委托、插件路径、行配置覆盖上限、读取器缺失时的回退）、分叉会话的日志读取优先级与回退，搜索下界的取值与游标的自包含（翻页跨增长、跨插入搜索、跨重新铸造都不重页），转录预算的精确适配（单条目与多条目），以及笔记裁剪的三种损失情形。
-
-因为构建产物把 `@deepseek-ai/*` 和引擎保持为外部依赖，检查必须对着**能解析这些包名的**那棵树跑；本仓库自身不含 harness，所以加 `--installed <插件安装目录>` 指向一份装好的副本。装到 profile 之后这样跑：
-
-```bash
-node test/run.mjs --installed <profile>/node_modules/dsh-context-zip
-```
-
-## 设置
-
-设置面板里会多一节「ContextZip」，分五块：
-
-1. **压缩方式**：组内第一行是「压缩后端」那一行（左标题带问号气泡、中间主行加副行、右端需要动作时那颗「接管」按钮），说的是压缩那一行有没有真的被本插件接管；第二行才是新建会话默认走 ContextZip 还是内置后端，二选一；再往下列出此刻真的在走 ContextZip 的会话。那张表只读，只列会话号形态的键（agent 预设名那一类不显示，判据与宿主侧同一处原文 `src/session-key.ts`），每行是会话名（取不到标题就印完整会话号）加一个复制会话号的按钮；默认先给十条，按「显示更多」每次多十条。名字来自宿主的 `sessionQuery.readTitleSnapshots`，经插件内的标题备忘录带到面板：会话开着或关着都能取到落过盘的标题，取不到才回退印完整会话号。**名字是晚到的**——打开面板先出结构，首次 `GET /dsh-context-zip/settings` 立刻答备忘录里现有的名字（多半是空的），折叠在响应之后于后台跑，5 秒一跳的 `/live` 把名字补进面板，所以不需要重新打开面板；备忘录 60 秒过期，过期后的那次重取覆盖整张表。
-2. **摘要兜底**：机械摘要兜底开关（旁边有问号，点开是正式说明）与「失败几次后兜底」。
-3. **摘要重排**：排版重排开关（同样有问号说明）与重排用的模型来源与型号。
-4. **实验与排障**（默认收起）：历史工具呈现、检索覆盖表（与第 1 块同一套只读形态，行上标出那一档取值）、检索节流开关、检索打点文件路径。
-5. **压缩分段**：填一个会话号，按「列出分段」看它的分段；按钮文字随展开在「列出分段」与「收起信息」之间切换。
-
-第 2、3 两块只在第 1 块选了 ContextZip 时出现。
-
-- 默认**关**，也就是新会话交给内置后端压。
-- 作用域是**会话级**，每次要判定时现算，不冻结。改设置立刻影响已经开着的会话。
-- 查表顺序是会话号在前、agent 预设名在后。会话号是唯一能把一个会话从同预设的同门里单独拎出来的键，所以预设行不能盖住它。
-- 面板顶上只印插件显示名 `ContextZip`。2026.09.20 撤掉了原先两行：一行把总开关读成「新会话的默认值」，另一行按会话实时统计活会话走哪边。总开关是什么，设置项自己已经说清；实时数字的轮询仍在跑，只是面板不再显示它。
-- 会话名的折叠（`sessionQuery.readTitleSnapshots` 要逐个会话折叠事件日志）**不在请求路径上**：插件内有一份按会话号的标题备忘录（`src/session-titles.ts`，过期 60 秒），`GET /dsh-context-zip/settings` 立刻用备忘录里现有的名字回答并在后台起一次刷新（防重入），5 秒一跳的 `GET /dsh-context-zip/live` 也带 `titles`，面板把晚到的名字并进来。改这一处是因为实测 `/settings` 要 2.35 秒（7 个键里有一个会话日志 31 MB），同插件的 `/live` 只要 0.0007 秒。
-
-### 两条长说明只有一个出处
-
-兜底开关与重排开关旁边各有一个问号，点开是一段正式说明。那两段话、`settings.yaml` 里同名字段的 `description`、以及本文档下面的引用，**同出于 `src/panel-copy.ts` 一个模块**（`FALLBACK_ENABLED_COPY`、`REWRITE_ENABLED_COPY`，每个都是 `{ en, zh }`）。放一处是因为它们原先分散在客户端字符串表与 schema 两边，可以各自改、各自漂移而没人发现。
-
-`fallbackEnabled`：压缩尝试连续失败达到「失败几次后兜底」设定的次数时，以插件依据会话事件自行拼写的台账摘要替代模型摘要，使压缩落地。关闭（默认）时，尝试次数用尽即报告失败，旧对话原样保留，上下文中不进入任何非模型撰写的内容。开启时压缩必然完成，代价是摘要形如台账，不具备模型摘要的判断力；该摘要的每一行均来自会话事件本身，不可能编造。
-
-`rewriteEnabled`：对形态门判定为无小标题结构的摘要，追加一次仅调整排版的重排调用。该调用只携带这份摘要，不重发被压缩的对话，思考档位固定在模型声明的最低档，且只允许按五段式重排，不得增删事实。重排前后各执行一次编造检查，只要出现原摘要中没有的 token，即丢弃重排结果并采用原摘要；调用失败同样采用原摘要，因此该功能不会导致压缩失败。
-- 这个开关的范围只管自动压缩那一步，`/zip-compact` 命令不受它管（见「压缩模式的按会话切换」那一节）。
-
-### 四个键的取值、代价与它们在面板里的位置
-
-这四个键的作用域是 `live`，改完立刻生效。2026.09.20 之前面板上一个控件都没有；现在 `retrieval`、`throttle`、`tracePath` 三个进了「实验与排障」折叠区，`retrievalAgents` 仍然只能改 `<harness home>/settings.yaml` 的 `context-zip` 段。下表那一列写的是当初「为什么不给控件」的理由，现在读作「为什么把它们藏进默认收起的折叠区」。
-
-| 键 | 默认 | 是什么，代价是什么 |
+| 能力 | 说明 | 默认状态 |
 |---|---|---|
-| `retrieval` | `granular` | 历史检索工具的呈现方式。`granular` 是默认，与这个选项存在之前逐字相同；`batched` 多给一个 `history_find`；`batched-only` 藏掉 `history_search`，一次调用带多个词。固定任务上实测 `batched-only` 要 9/10/12 个作答往返，`granular` 是 2 个，所以后两档是实验臂，不做成面板选项。 |
-| `retrievalAgents` | `{}` | `retrieval` 的按会话覆盖，键法与 `agents` 相同：会话号在前、agent 预设名在后。 |
-| `throttle` | `false` | 检索节流总开关：回执、已读过的事件不再重发、连续两次零新增后暂停搜索、单次读取上限。**效果从未确立**：同样四格跑三次，对基线的 token 比落在 0.10× 到 8.46× 之间；已发表的工作报告激进节流会掉准确率。默认关，关着时账本与 `tracePath` 照常跑，未节流的基线仍然可测。 |
-| `tracePath` | 空 | 每检索一次追一行 JSON 的文件路径。空着不写。这是看节流行为的地方：每行带轮次、第几次检索、是扫描还是读取、新增多少事件、因已持有而扣下多少、零新增连了几次、收窄是否生效。这个 harness 不带日志导出器，插件日志只进内存缓冲，文件是唯一能读到这些数的地方。 |
+| 压缩接管 | 五段式交接摘要，软目标 3072 token，硬上限 6144 | 关（新建会话走内置后端，面板里可开） |
+| 分段目录 | 每次压缩记一段，可列出段号、被替换事件号、摘要事件号 | 常开 |
+| 检索工具 | `history_segments`、`history_read`、`history_search`、`history_find`，只读本会话 | 常开 |
+| 工作笔记 | `notes_write` / `notes_read` / `notes_search`，草稿上限 6000 字符，下一次压缩时并入摘要 | 关 |
+| 机械摘要兜底 | 连续失败到设定次数（默认 5）后用台账摘要使压缩落地 | 关 |
+| 排版重排 | 无小标题结构的摘要追加一次只改排版的调用，不重发原文 | 关 |
+| 检索节流 | 检索回执、增量过滤、收窄与读取上限；效果从未确立 | 关 |
+| 设置面板 | ContextZip 一节：压缩方式、摘要兜底、摘要重排、实验与排障、压缩分段；输入框旁有压缩方式芯片 | 常开 |
+| 导出与手动压缩 | 只读服务 `contextZip` 与 `/zip-export` 命令；`/zip-compact` 命令不受总开关管辖 | 常开 |
 
-把它们放进默认收起的折叠区而不是常规设置项，理由与当初不给控件一样：后两档是实验臂、`throttle` 的效果未证实、`tracePath` 是排障口，摆成常规设置项就等于推荐。
+面板那一行长这样：左标题带问号气泡，中间主行加副行，右端按钮。共九态：未生效、正在接管、已生效、待更新、等待重启、被占用、接管不完整、状态未知、接管失败。其中「被占用」在面板上主行显示「未生效」，副行说明那个位置已被别的实现占着。
 
-## 这个插件不往会话日志里写任何东西
+## 截图
 
-值得单独说清楚，因为它决定了卸载的成本。
+面板「压缩后端」那一行的四种状态：
 
-设计稿草稿里写过「用一条自己的日志事件记录本次压缩用的是哪种模式」。**这条不采纳。**
+![未生效](https://raw.githubusercontent.com/brunhildzhou/dsh-context-zip/main/docs/images/panel-wire-inactive.png)
+![正在接管](https://raw.githubusercontent.com/brunhildzhou/dsh-context-zip/main/docs/images/panel-wire-taking.png)
+![已生效](https://raw.githubusercontent.com/brunhildzhou/dsh-context-zip/main/docs/images/panel-wire-active.png)
+![等待重启](https://raw.githubusercontent.com/brunhildzhou/dsh-context-zip/main/docs/images/panel-wire-restart.png)
 
-- `Session.prototype.append` 从固定的键集合构造事件信封（`type`、`seq`、`time`、`data`、`sourceEventSeqs`、`surfaceOp`），没有设置 `ignorable` 标记的入口。包装 `append` 也没用：包装层传下去的 `ignorable` 会被原方法丢弃。
-- 自定义类型不在 `KNOWN_SESSION_EVENT_TYPES` 里，插件也无法把自己的类型加进去。
-- 持久化读路径（`dsh-session-persistence` 的 `validateStoredEvents`）对「不认识的类型且没有 `ignorable` 标记」是**拒绝重建整个会话**。
-- 实测：带这条事件的会话被 `validateStoredEvents` 以 `SessionFormatUnsupportedError` 拒绝，会话再也打不开。
+检索工具的输出与压缩后的五段式交接摘要：
 
-所以插件现在写进会话日志的事件数是**零**。压缩产生的那三个事件（`compaction/start`、`compaction/summary`、`compaction/end`）全部由内置后端写，类型和格式都不是这个插件定的。插件自己的状态只有工作笔记、导出，都在 `<harness home>/context-zip/` 下，和日志分开。
+![history_segments 回显](https://raw.githubusercontent.com/brunhildzhou/dsh-context-zip/main/docs/images/tool-history-segments.png)
+![五段式交接摘要](https://raw.githubusercontent.com/brunhildzhou/dsh-context-zip/main/docs/images/summary-five-sections.png)
 
-这条性质带来两个直接后果：卸载不可能弄坏任何会话；已经压过的会话在卸载后照常打开、照常继续，只是以后不再由本插件压。
+四态截图取自隐藏虚拟桌面里的一个临时 DSH 实例（临时 `DSH_HOME`、端口 3190），不是用户真机；后两张的会话内容由本地桩模型驱动，用来展示界面形态，不作为能力或效果证据。逐图来源与脱敏口径见 `docs/截图清单.md`。
 
-早先版本在 `<harness home>/context-zip/modes/<sessionId>.json` 存过一份「本会话的模式」记录。改成实时读之后这份记录没有任何读者了，已删除：它记录的是一份会过期的快照，留着只会误导。
+## 兼容性与边界
 
-## 已验证（隔离 profile 跑真机）
+- **宿主**：DeepSeek Harness，peer 范围 `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0 || >=0.1.7-alpha.1 <0.2.0-0`；实测通过的是 `0.1.5-rc.2`、`0.1.6-alpha.2` 与 `0.1.7-alpha.1`，其余 0.1.x 版本未逐一实测。
+- **Node.js**：`^22.19.0 || >=24.0.0`（`dsh-context-zip/package.json` 的 `engines`）。
+- **peer 依赖**由 profile 的 `node_modules` 解析，不随本插件安装。
+- **`@deepseek-ai/schemastery`**：peer 下限 `^3.18.1`，取的是已知能跑的最低版本。`Schema.volatile()` 是 3.18.3 才有的 API，低于它的版本上插件照常压缩、照常读写行配置，只是设置页不会生成表单、设置写入走插件面板的配置编辑器；想要那张自动表单，需要 profile 那份 schemastery 升到 3.18.3。
+- **界面语言**中英双语，面板文案两套，键集合一致。
+- **只支持 DSH**，不能独立运行。
+- `redirect/` 是本地重定向包，沿用 `@deepseek-ai/dsh-compaction-basic` 包名把调用接到本插件。它不是官方包（`private: true`），安装器拒绝覆盖真实包。
+- 升级 DSH 之后重定向可能落后，用 `--check` 确认并重跑安装刷新。
+- 其余边界（节流效果未确立、会话名最长 60 秒更新、标题备忘录无容量上限、按会话覆盖表在面板上只读、安装器不留快照）见 `docs/局限性与已知问题.md`。
 
-**服务端**
+## 怎么自己验证
 
-- 插件在 `web` 与 `headless` 两个 profile 上都能挂载，harness 正常启动。
-- `compaction-basic` 那一行确实解析到 profile 本地的重定向，挂上来的是本插件的引擎（构造探针确认）。
-- 真实压缩跑通：`compaction/summary` 带全部五个小标题、`maxTokens: 6144`、模型 `deepseek-flash`。
-- 笔记全链路跑通：`notes_write` 回 `ok`，草稿进入摘要调用（引擎侧测得 87 字符），压缩后草稿归档到 `seg-000.md`。
-- 四个笔记/回查工具在真会话里逐个可用：`notes_write` 回 `ok`，压缩后 `notes_read` 正确报告草稿已空，`notes_search` 从归档里按关键词找回那一行，`history_search` / `history_read` 返回真实命中与原文。
-- 会话可重建：写完的会话通过 `validateStoredEvents`；修复前写的会话被拒——这条差异本身是缺陷存在的证据。
+插件自带运行时检查，`--installed` 加 `--deliverable` 一档实测 1358 条全过。跑法与覆盖见 `evidence/套件说明.md`。
 
-**浏览器半边（隐藏虚拟桌面里的真 Chrome 打开真 GUI）**
+## 仓库布局
 
-- 设置左栏出现独立的「上下文压缩」分栏，与「通用设置」「模型」「插件」「Agent 预设」同级。
-- 「当前生效模式」那一行按真实状态渲染：没配过时显示「关 · 默认值，尚未设置过」，`settings.yaml` 里写了 `enabled: true` 之后显示「开 · 来自设置」，并带上本进程的会话快照计数。开关状态与文字都跟着走。
-- `/zip-export` 出现在 `/` 补全的指令列表里（描述就是注册时写的那句），输入命令后 token 被客户端识别为命令而不是普通消息。
-- `/zip-export <会话号>` 真机跑通，导出 `session-<示例>-seg-000.md` 与 `-seg-001.md`；文件头含会话号、段号、**被替换事件号范围 8..10**、**压缩时间**、**模型 `deepseek-official/deepseek-flash`**、compactionId、摘要事件号，正文是定稿摘要加按 seq 升序的原文。
+仓库根是发布包：`README.md` / `README.en.md`、本插件目录 `dsh-context-zip/`、文档 `docs/`、证据 `evidence/`、`RELEASE-NOTES.md`、`LICENSE`。完整导览见 `docs/仓库布局.md`，功能入口见 `docs/`。
 
-## 本轮开发中发现并修掉的问题
+## 用着还行的话
 
-- **`cordis.patch.yml` 是空列表**，等于插件本体从未被挂载：`apply()` 不跑，工具、路由、设置分栏、笔记、提醒全部不存在。补上 `insert`。
-- **`inject` 用了 `{ required, optional }` 对象形状**。Cordis 把 `inject` 规范成「服务名 → 配置」的表并等待表里每一个名字，于是它去等两个名叫 `required` 和 `optional` 的服务，行永远 pending，整个 profile 起不来。改成数组。
-- **可选服务用属性读取**。Cordis 拒绝读取没有 inject 的服务属性（`cannot get property "systemPrompt" without inject`），可选服务必须走 `ctx.get(...)`。
-- **插件自己 `new EngineClass(...)`**。这和 `compaction-basic` 那一行在同一 realm 里重复注册 `compaction`，直接 `service "compaction" has been registered` 崩掉。
-- **`settings` 在 apply 时还不存在**。插件只等四个必需服务，`settings` 行比它晚，一次性 `ctx.get` 会把设置命名空间永久丢掉（笔记模式因此永远是关）。改成 `ctx.inject(['settings'], ...)` 等它出现，`systemPrompt` / `commands` / `webServer` 同样处理。
-- **`session.events` 在真 Session 上不存在**。真 API 是 `snapshotEvents()`；原写法在 `session/created` 里抛 `TypeError`，模式事件与 75% 提醒整条链是死的。测试用的假 session 自带 `events` 数组，所以原来的检查一项都没抓到；假 session 已改成只暴露 `snapshotEvents()`。
-- **模式事件没有 `ignorable`**（见上一节），会把会话写坏。记录改放插件自己的目录。
-- **模式快照按 Session 对象做键**。监听器拿到的是作用域代理，对象身份跨不到工具调用，`notes_write` 因此永远回「notes mode is off」。改按会话号做键。
-- **`notes_write` 拿快照对象和字符串比**。`modeFor` 返回的是 `{mode, source, revision}`，和 `'notes-on'` 比永远为假。改读 `.mode`。
-- **摘要调用把工具清单带下去了**。对话里若有一句「先调 bash 再回答」，摘要器会照着重放这个工具调用，`finish` 停在 `tool-calls` 且没有任何正文，整次压缩作废。同会话对照实验里自带后端能出摘要、本插件出不来；去掉工具清单后稳定出五段。摘要是一次纯文本变换，不需要工具。
-- **引擎包被 inline 进插件产物**。插件因此带着第二份私有引擎模块，模块级的 notes 读取器写在一份上、被挂载的引擎读另一份，笔记永远进不了摘要。改成外部依赖。
-- **导出文件名与元信息不符规格**。文件名从 `<exportsRoot>/<sessionId>/seg-000.md` 改成 `<会话id>-seg-<段号>.md`；补上事件号范围、压缩时间、模型三项；原文按 seq 升序（原来按 surface 顺序，两者不同）。
-- **`defineTool` 之外，`renderEvent` 原本按 `data.content` 读助手消息和工具结果**，但 rc 系列把它们包在 `data.message` 里，会导致回查到的助手回复和工具输出全是空标记。按真实载荷形状改成读 `data.message?.content`。
-- **工具结果块内部还嵌着一层 content**，`textOf` 原本不跟进，会丢掉工具的实际输出。已改成递归跟进 `tool-result`。
-- **行重定向最初的写法是从引擎包 import 自带的 `BasicCompactionEngine`**，会和重定向形成循环。改成基类由重定向注入、引擎接收工厂参数。
-- **摘要器继承对话自己的 system prompt**。那个 prompt 说「你是有工具的编码 agent」，于是模型要么去调工具，要么在没有工具清单时**把工具调用当正文写出来**——落库的摘要是 `<tool_calls><invoke name="notes_write">` 这种垃圾，而且因为够短还通过了尺寸检查。改成给摘要调用一条专用 system 指令，并加「至少含 3 个规定小标题」的验收闸门：不合格就抛错让压缩跳过，保住原文而不是写进垃圾。
-- **`/zip-export` 没声明 `input` 描述符**。浏览器客户端的 enter 分发规则是：命令带尾随输入但没声明 `input` 时，整行落回普通消息处理，只有裸 token 才进 handler。handler 一直在读 `invocation.rawInput`，但带参数的命令从 GUI 根本到不了它。补上 `input: { hint }`。
-- **导出走的是 live-only 的 `sessionOf`**。导出是复查出口，要能取已经不在本进程里的会话；`sessionOf` 对非活跃会话直接抛错，等于这个命令导不出它最该保住的那段历史。改用支持从存储重建的 `sessionFor`。
-- **设置值与 schema 默认值分不开**。`scope.get()` 永远返回布尔（schema 有默认值），「用户明确关掉」和「从来没配过」是同一个值。改成同时记录 `describe().user` 里真正出现的字段，模式来源才如实显示 `settings` 还是 `default`（规格 5.3 要的就是这个区分）。
-- **`settingsState.userAgents` 为空时按预设命中仍报 `settings`**：同上，按 `user` 段里实际出现的键判断。
-- **没有类型检查**。补 `tsconfig.json` 与 `typescript`/`@types/node`，`npm run typecheck` 独立可跑，`npm run check` 串起构建、类型检查与语法检查。首次运行报出 **32 个真实错误**：`Session.fromRestore` 少传两个必填参数、`NoteStore` 构造函数参数非可选、`TextValueSchema` 字面量被拓宽成 `string` 导致工具值类型塌成 `never`、`redirect.ContextZipEngine` 在自带后端的类型上不存在、摘要元信息默认值类型等。全部修掉后归零。
-- **会话号覆盖被预设覆盖挡住**。查表顺序写成了预设在前、会话号在后，而我自己的注释写的是「会话号必须赢」。预设行会命中该预设下的每一个会话，它一优先，会话号那一档就永远轮不到，「把某个会话单独拎出来换一种压法」这件事整个不成立。这个 bug 从功能存在起就在，但那段逻辑读的是模块级状态，测试够不着；把决策拆成纯函数 `resolveModeFrom(state, session)` 后，第一次跑就报了出来。
-- **分叉会话里回查工具全死**。`readSessionEvents` 原本优先走 `sessionQuery.readSession()`，而那个接口内部用 `Session.create()` 重建日志，一旦种子会话长过它的继承前缀就抛 `seeded session constructor seed must equal its inherited prefix`。分叉出来的会话压缩过一次就正好是这种状态，于是 `history_segments` 和 `history_read` 全抛错，模型拿到的是构造函数的原始错误。改成优先读活跃会话自己的 `snapshotEvents()`，查询服务退为备用。原来的 75 项检查用的是假会话，抓不到这条。
-- **搜索会匹配到它自己**。`history_search` 执行时，承载这次调用的 `tool/call` 事件已经落进日志并被索引，于是每一次搜索至少返回一条「我自己」，一个凭空造的词也会被报成「找到了」。对一个用来确认「东西是不是被压丢了」的工具来说这是会误导人的。加了 `{kind:'seq', to: N}` 上界，N 取最近一条助手消息之前：搜索查的是已经落进会话的历史，不含当前这一步。
-- **搜索翻页会重复第一页**。这一条是修上一个问题时引入的。`history_search` 的上界是「请求这次搜索的助手消息之前」，而请求第二页本身就会追加一条新的助手消息，于是第二页的上界必然比第一页大；新事件进入候选集，同分时按 seq 新的排前，窗口就被顶回第一页。这个 profile 的 SQLite 索引是关的（`openAt: never`），走的是内存回退，游标是**每次重算的分数排序列表里的偏移量**，所以对候选集的变化毫无抵抗力。改成把上界与游标绑定：带游标回来时复用当初铸出游标的那个上界。真实会话里这条必然触发，因为第一页自己的 `tool/result` 会落进日志，而它的摘要里必然含有查询词。
-- **单条事件超过预算时什么都读不回来**。`renderTranscript` 在第一个块就超预算时直接 break，`parts` 仍为空，调用方于是报「no readable content in this window」——而那条事件有 22.8KB 正文。`maxChars` 上限是 20000，所以这种事件**永远读不回来**。改成显示它的开头并说明这是被裁的，与「后面还有更多」的普通截断提示区分开。
-- **笔记触顶时返回的是纯粹的 `ok`**。草稿有 6000 字符上限，超限会丢掉**最旧**的条目，但那次 `notes_write` 的返回与一次普通写入完全一样。唯一的提示走 `ctx.logger`，而本构建根本不打印日志，所以模型永远看不到。改成在工具结果里明说，并提示重新读取草稿。
-- **翻页的上界记在会话上，被别的搜索挤掉**。上界与游标绑定之后，它被存在「一会话一槽」的位置里，于是同一会话里任何另一次 `history_search` 都会把它顶掉，翻页又滑回第一页。两个 `history_search` 在同一个助手步骤里就够触发。改成按游标本身记（会话号、查询词、作用域、游标文本四元组），并对条数设上限。
-- **恰好适配预算的条目被当成超预算裁掉**。判据写的是 `block.length + 1 > budget`，那个 `+1` 是条目之间的连接换行，而单条目从不付这笔账，所以一条渲染后正好等于预算的条目会被砍掉约 175 字符，还被告诉读者「它自己就超预算」。改成第一个条目不计换行。
-- **单条笔记比整个草稿上限还大时，提示指错了损失**。草稿是空的，没有任何更旧的条目可丢，实际被截断的是**新写的这一条**，而提示说「最旧的条目已被丢弃」。`append` 现在同时返回「是否裁剪」和「是否有更旧的被丢」，工具结果按实情措辞。
-- **翻页的上界只钉住了第一页**。上一版把上界与游标绑定，但只在**首页**铸游标时记录，于是第二页铸的那个游标没人记得，第三页又回落到实时上界，重复第二页的最后一条。这不是罕见状态：默认 `limit` 是 20，命中超过 40 条就会翻到第三页，而每一页自己的 `tool/call` 都带着查询词，所以候选集在**每一对**页之间必然增长。根子在于上界依赖一个一直在动的量。改成把上界**写进游标文本本身**（`<偏移>~<上界>`），游标自包含之后，翻多少页、中间插多少次别的搜索、同一查询重新铸造多少次都不再互相干扰；侧表只留给索引服务自己签发的不透明游标，并且续页也记录。
-- **转录预算把连接分隔符算重了**。`used` 每压入一个条目就加一次分隔符，而分隔符只在条目**之间**存在，于是两处判据都把第一页之外的分隔符算了两次。单条目时表现为「恰好适配被判超预算」，修掉之后同样的错在**第二个条目**上还在：一个拼接后正好等于预算的两条目窗口会丢掉第二条。改成让 `used` 严格等于 `parts.join('\n')` 的长度。
-- **笔记同时发生两种损失时只报了一种**。草稿接近上限时写一条超大笔记，既会丢掉最旧的条目，新写的这一条本身也会被截断，而提示只说「最旧的条目已被丢弃」，读起来像新条目完整保留了。`append` 现在分别测出这两件事（`droppedOlder` 与 `entryCut`，后者是实测「这次追加的条目是否还完整在草稿里」，不是推断），工具结果分别措辞。
-- **「本次搜索没有上界」被 `??` 吃掉了**。游标里那个空的上界段是能正确解出来的，但紧接着的 `pinned ?? 实时上界` 把「解出来就是没有」和「没找到记录」当成了同一件事，于是无上界的搜索翻到第二页时会**默默采用**中途才出现的上界，不再是签发这个游标时的那个请求。改成对解码结果分支：解码成功就用它的值（哪怕是空），解码失败（索引服务自己签发的不透明游标）才去查侧表。
-- **认不出来的游标被当成第一页照常返回**。游标既不是本插件签发的格式、侧表里也没有记录时（例如把 `10~27` 抄成了 `10`），旧行为是回落到实时上界、偏移按 0 算，于是**第一页被当作续页返回**。这个工具的产出是模型要信任的，静默返回错页比报错糟，所以现在直接拒绝并让调用方从头重跑。
-- **覆盖表删不掉行**。写路由用的是 `scope.update`，而它把嵌套对象**合并**进已存的值：补丁里没提到的键保留旧值，空表什么都不删。于是「删除」这一行在面板上消失了、保存也报「已保存」，文件里却还在。合并确实把 `null` 当删除，但那样会把 `null` 原样写进 `settings.yaml`，而 schema 声明的是布尔值，整段设置下次加载就会失败（与之前 `off` 被 YAML 读成 `false` 是同一类事故）。改用 `scope.replace` 提交**算好的完整值**，于是「没提到」就是「删掉」，文件里只会出现合法的条目。
-- **面板说「快照在会话创建时读取，会话存续期间不随这里改动而变」，与实现相反**。压缩模式是**现读**的（这是按会话切换那一版刻意改成的行为），所以翻总开关会立刻改变已有会话的下一次压缩，面板那句话是旧文案。改成如实说明「此刻有几个会话由本插件压，按当前设置现算，改开关会立刻生效」。覆盖表的提示同样从「会话创建时读一次」改成「每次压缩前现读」。
-- **面板文案只改了中文那一套**。界面有两套语言对象，中文改对了，英文原样留着「Read once when a session is created and frozen for that session」，而 GUI 有一级语言切换器，所以英文用户看到的仍是那句假话。两套都改了，并加了一条结构性检查：两套的键集合必须一致、都不许出现「冻结」类表述、都必须说明现读。同一类漏改（改一处忘另一处）以后由检查兜住。
-- **全部是垃圾行时会静默清空整张表**。覆盖表按合并改成按替换之后，`{"agents":{"session-x":null}}` 这种请求里唯一的行被校验丢掉，剩下空表，于是「替换」把整张表清空了。面板不会发这种请求，但全丢光就当成清空太危险。现在「有行但一行都没通过校验」直接报错，而「有好的有坏的」仍按原样丢弃坏行（那是面板的正常输入）。
-- **`--profile-dir` 给错路径时会先写坏再报错**。安装流程先建 redirect 包、之后才读 profile 的 `package.json`，所以路径填错会留下装了一半的 redirect，然后抛一个裸 ENOENT，完全没说路径哪里不对。现在所有写入之前先校验 `package.json` 存在，报错直接说明「这不像一个 DSH profile，请传 profile 目录本身」。
-- **`--purge` 会删到别人的 home**（独立验收发现，高危）。卸载时插件数据目录取自进程环境变量 `DSH_HOME`（本机是 harness home），与 `--profile-dir` 毫无关系。于是「用隔离 home 做验收」这个最常见的用法下，`--uninstall` 打印的是**线上 home** 的路径，照它自己的提示补一个 `--purge`，删掉的就是线上那份笔记，而被卸载的 profile 自己那份原封不动。数据目录现在从 `--profile-dir` 往上两级推导，认不出的形状直接拒绝执行，`DSH_HOME` 与推导结果不一致时把两者都打印出来；要手工指定用新增的 `--home`。回归检查用「两个 home 各放一个哨兵文件」的方式钉住：purge 之后目标 home 的哨兵必须没了、另一个 home 的必须还在。**补**：`--home` 与推导结果归一化后不一致、且 `--home` 名下真有 `context-zip/` 时，`--purge` 改为拒绝执行——上一轮只修了「默认走哪个 home」，没堵住「显式指一个别人家」。**再补**（本轮）：`profiles` 这层自己是软链、软链目标的目录名不是 `profiles` 时（`<home>/profiles -> <other>/profiles-real`），canonical 路径里没有一层叫 `profiles`，home 推不出来——该布局**装得进去**（实测安装 EXIT=0，文件落在真树里），所以缺口是活的：`--purge` 没有自己的答案，`--home <词法 home>` 被当成兜底照删，而 `--home <物理 home>` 删的是另一个 home 的 store。现在第二条线索接上：这种布局下 home 就是**写出来的那个** `<home>`，删的是它名下的 store，`--home` 指到物理 home 反而被拒绝（那里连 `<物理 home>/profiles/<name>` 都不存在，它的 store 属于别的 profile）。同时把 `--uninstall` 的报告对齐到同一个推导结果：此前在 `profiles -> profiles` 的同类布局下，报告说「数据在 A」而 `--purge` 删的是 B。
-- **软链逃逸：安装器会跟着软链写到 profile 外面**（独立验收发现，高危）。`node_modules/@deepseek-ai` 整个是软链时，安装分支会把 redirect 的四个文件写进软链目标，`rm -r` 还会先删掉那里原有的东西，全程零提示；验收切片 R3 就是这样把四个文件写到 profile 外面的。第一版修法只把守卫接到了**卸载**分支（`rm(pluginDir)` 在文件里出现两次，改到了第一处），安装分支一个守卫都没有。现在：容器 `node_modules` 的真实路径解析一次并判定，安装目标全部相对它拼、逐个确认每段都不是指向外面的软链；`<profile>/package.json` 单独按文件判；卸载分支三个目录逐个判；`--purge` 的 `context-zip/` 按 home 判。**逐路径独立判定不是闭包**：`node_modules` 指外、里面两个包名指回 profile 内就能骗过三个独立判定，所以判定的单位换成了容器。拒绝发生在任何写入之前，10 个逃逸场景与 8 个合法场景的回归矩阵见发布包 `evidence/验收台账.md`。
-- **拨动开关在写入期间把自己禁用，焦点掉了回不来**（独立验收发现）。`disabled` 里含了 `busy`，而浏览器在元素变 disabled 时会把焦点移走，于是键盘用户按一次空格之后第二次打不到控件上（焦点落到 `<body>`），鼠标用户点完开关得重新点回输入框才能继续打字。改成写入期间不再禁用，靠 `flip()` 开头的重入守卫防重复提交；同时加了乐观更新，旋钮立刻跟手，不再等两次往返（冷启动时实测 481ms）。
-- **拨动开关没有可见的键盘焦点环**（独立验收发现）。聚焦前后芯片区域逐像素零差异，违反 WCAG 2.4.7：真正聚焦的 `input` 是 `opacity:0` 且零尺寸，`outline` 画在看不见的地方。补了 `input:focus-visible + .track` 的规则，在轨道上画环。
-- **第一次拨动会把 `enabled: false` 固化进 `settings.yaml`**（独立验收发现，**记录不修**）。设置段本来不存在时，`readSettings()` 返回带默认值的对象，写路由用 `scope.replace` 整段替换，于是默认值被物化。类型和取值都对，但面板的「新会话默认」会从「默认值，尚未设置过」变成「来自设置」，而且钉死了一个 `false`，将来改 `DEFAULT_ENABLED` 影响不到这些 home。修它要动设置读写两侧对「缺省键」的约定（存储层省略 `enabled` 是否合法、读回时是否补默认值），得先做一轮设置层的往返实测，风险大于收益，故本轮只记录。
-- **`applySettingsPatch` 只带四个键，于是每次保存都会重置别的设置**（本轮加格式改写时暴露）。写路由最后调 `scope.replace(next)`，把整段设置换成 `next`，而 `next` 先前只由 enabled/agents/retrieval/retrievalAgents 组成；`throttle`、`fallbackEnabled`、`fallbackAfterFailures`、`tracePath` 不在其中，`replace` 一提交就被从存储段里抹掉，schema 再补回默认值。原先没有单独可写这三个字段的入口，所以没暴露；而面板每次保存都会把整份设置发回来，兜底开关一旦打开，下一次任意保存就会把它关掉。改成把这四个字段（以及本轮新增的三个改写字段）一并带过去：补丁里写了就用补丁的，没写就用当前生效的。
+欢迎到 [GitHub](https://github.com/brunhildzhou/dsh-context-zip) 点个 star，或者提 issue 说哪里不好用。
 
-## 格式改写：只改排版（2026.09.18）
+## 许可与致谢
 
-**要解决的问题**：形态门（`classifySummary`）现在接受「通篇散文」，认不出小标题也放行——这是 2026.09.18 拍板的，为的是修那 16.1% 的误杀率。代价是后续模型更难在那份摘要里定位旧信息。所以补一道**只改格式**的改写：把散文重新排成五段式，事实一个字不动。
-
-- **默认关**。设置项是 `rewriteEnabled`，加上 `rewriteProvider` / `rewriteModel` 两个字段；后两者为空表示「未选」。
-- **只在形态失败时触发**。判据是 `classifySummary` 判成 `unrecognised-sections`，也就是「被接受的散文」。`tool-call-markup` 与 `too-short` 那两支一行都没动，它们照旧走重试与机械兜底。
-- **输入只有那份摘要**。不重发被压缩的对话：一是贵，二是看不见新素材就没有东西可编。
-- **思考档位锁最低档**，界面不暴露旋钮。这是用户明确同意的：机械任务不需要长推理，档位越高越容易「顺便把内容改好」，暴露旋钮等于邀请用户调高。锁不住（模型元数据取不到）就不改。
-- **护栏**：改写前后各跑一次 `findUnsupportedClaims`，取**集合差**（不是数量差）。只要改写新增了一个原文和原摘要都没有的 token，就丢弃改写、用回原文。
-- **失败一律退回原散文**：改写调用失败、元数据取不到、护栏判退、改写完仍不是五段式——四条都只是少一次排版改善，绝不让压缩失败。
-
-**护栏的实测误退率必须一起读**。在 522 份真语料上（`docs/功能文档.md` §九）：
-
-| 改写做什么 | 被护栏退掉 |
-|---|---|
-| 逐字未改（自检） | 0 / 522（0.0%） |
-| 只加五个小标题并折行，token 一字不动 | 0 / 522（0.0%） |
-| 排版 + 裸名补成原文里已有的带目录写法 | 0 / 522（0.0%） |
-| 排版 + 路径统一成 `src/` 前缀 | 192 / 522（36.8%） |
-| 排版 + 路径加 `./` 前缀 | 386 / 522（73.9%） |
-
-**规律是：改写不碰路径写法，护栏几乎不挡；一碰，就退掉三到七成。** 这是 B10 自身 90% 误杀率在集合差上的投影，不是改写的毛病。所以提示词里把「路径照抄、不许补前缀、不许统一两种写法」写死（提示词原文见 `2026.09.18-dsh-context-zip功能文档.md` §九），并且在报告里如实记下：**模型守规矩时实测误退率 0%，模型顺手统一路径时 36.8%–73.9%。**
+MIT，许可全文见 `LICENSE`。运行环境是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)。与同类插件的对照（含本插件不如别人的地方）见 `docs/同类插件对比.md`。
