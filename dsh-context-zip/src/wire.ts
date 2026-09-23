@@ -33,6 +33,9 @@ import { fileURLToPath } from 'node:url';
 
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
 
+import { inspectThreshold, planThreshold, thresholdDrift, thresholdWriteMatches } from './threshold.ts';
+import type { ObservedState } from './threshold.ts';
+
 /** The package name the `compaction-basic` row resolves. */
 export const REDIRECT_PACKAGE = '@deepseek-ai/dsh-compaction-basic';
 
@@ -411,6 +414,61 @@ export async function basePackageDir(profileDir) {
 }
 
 /**
+ * The `source` an installed redirect recorded, when that path still holds a real
+ * package.
+ *
+ * @param redirectDir - where the redirect would be.
+ * @returns the recorded package directory, or `null`.
+ */
+async function recordedBackendDir(redirectDir) {
+  let stamp;
+  try {
+    stamp = JSON.parse(await readFile(join(redirectDir, STAMP_FILE), 'utf8'));
+  } catch {
+    return null;
+  }
+  const source = typeof stamp.source === 'string' ? stamp.source : null;
+  if (source === null) return null;
+  try {
+    const manifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'));
+    // A recorded path that now carries a redirect is not the shipped backend.
+    if (String(manifest.version ?? '').includes(REDIRECT_MARKER)) return null;
+    return source;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where the shipped backend can be read from.
+ *
+ * `basePackageDir` answers only while the profile's own copy of the specifier is
+ * still the real package. An installed redirect REPLACES that copy, and under a
+ * package manager's layout the real one sits in the store, off every lookup
+ * path. Without this fallback the button could wire a row exactly once and never
+ * repair it, because re-wiring reads the very thing the redirect displaced. The
+ * stamp records where that copy came from, and that is the one pointer left.
+ *
+ * @param profileDir - the profile whose `node_modules` is searched.
+ * @param redirectDir - where an existing redirect would be.
+ * @returns the absolute package directory.
+ * @throws when neither the lookup path nor the stamp answers.
+ */
+async function wireBackendDir(profileDir, redirectDir) {
+  try {
+    return await basePackageDir(profileDir);
+  } catch (error) {
+    const recorded = await recordedBackendDir(redirectDir);
+    if (recorded !== null) return recorded;
+    throw new Error(
+      `${String(error?.message ?? error)}. A redirect is installed at ${redirectDir}, so this profile ` +
+        'no longer resolves that specifier, and the source its stamp recorded is gone too. Plant a copy ' +
+        `of the real package at ${join(dirname(profileDir), 'node_modules', '@deepseek-ai', 'dsh-compaction-basic')} and press the button again.`,
+    );
+  }
+}
+
+/**
  * Whether the row is wired, and which backend the redirect wraps.
  *
  * A read may not fail over the version comparison: the stamp is what the panel
@@ -454,6 +512,19 @@ export async function readWireStatus(options) {
   } catch {
     // The backend could not be located; that is not a status read failure.
   }
+  // The threshold edit is read back from the bytes, never assumed from the stamp:
+  // a `base.js` that lost the patch behaves like an unpatched backend, and being
+  // able to tell those two apart is the whole reason the state is recorded.
+  let patchObserved: ObservedState | null = null;
+  let patchDrift = false;
+  try {
+    const text = await readFile(join(redirectDir, 'base.js'), 'utf8');
+    patchObserved = inspectThreshold(text);
+    patchDrift = thresholdDrift(stamp.patch, text);
+  } catch {
+    // An unreadable `base.js` is not a failed status read; it is drift.
+    patchDrift = true;
+  }
   return {
     wired: true,
     version,
@@ -461,6 +532,9 @@ export async function readWireStatus(options) {
     copiedAt: typeof stamp.copiedAt === 'string' ? stamp.copiedAt : null,
     stale,
     foreign: false,
+    patch: typeof stamp.patch === 'string' ? stamp.patch : null,
+    patchObserved,
+    patchDrift,
   };
 }
 
@@ -492,9 +566,10 @@ export async function wireCompactionRow(options) {
     );
   }
 
-  // Resolve the backend first. `basePackageDir` skips a redirect by its version
-  // marker, so this is correct with or without a previous wiring in place.
-  const baseDir = await basePackageDir(profileDir);
+  // Resolve the backend first, and before anything is removed: a refusal has to
+  // leave a working wiring standing. `wireBackendDir` also covers the re-wiring
+  // case, where the redirect itself is what hides the real package.
+  const baseDir = await wireBackendDir(profileDir, redirectDir);
   const baseManifest = JSON.parse(await readFile(join(baseDir, 'package.json'), 'utf8'));
   if (String(baseManifest.version ?? '').includes(REDIRECT_MARKER)) {
     throw new Error(
@@ -503,8 +578,13 @@ export async function wireCompactionRow(options) {
     );
   }
   const baseEntry = join(baseDir, baseManifest.exports?.['.']?.default ?? baseManifest.main);
-  const baseSource = await readFile(baseEntry);
+  const baseSource = await readFile(baseEntry, 'utf8');
   const version = String(baseManifest.version ?? 'unknown');
+  // The threshold decision, made before anything is removed: a backend carrying
+  // neither recognised form has to stop the button while the previous wiring is
+  // still standing. The command line can pass `--stock-backend` to wire such a
+  // backend on purpose; the button has no arguments, so it refuses and says why.
+  const plan = planThreshold(baseSource, { allowStock: false });
 
   // The two copied files are read before the target is cleared, so a plugin tree
   // that somehow lost `redirect/` fails while the old redirect is still standing.
@@ -526,14 +606,25 @@ export async function wireCompactionRow(options) {
     version,
     source: baseDir,
     copiedAt: new Date().toISOString(),
+    patch: plan.state,
   };
   await rm(redirectDir, { recursive: true, force: true });
   await mkdir(redirectDir, { recursive: true });
   await cp(sourceManifest, join(redirectDir, 'package.json'));
   await cp(sourceIndex, join(redirectDir, 'index.js'));
-  await writeFile(join(redirectDir, 'base.js'), baseSource);
+  await writeFile(join(redirectDir, 'base.js'), plan.text);
+  // The bytes are the contract: a file that is not what the plan decided removes
+  // the redirect rather than leaving an unverified backend where the row loads it.
+  const written = await readFile(join(redirectDir, 'base.js'), 'utf8');
+  if (!thresholdWriteMatches(written, plan)) {
+    await rm(redirectDir, { recursive: true, force: true });
+    throw new Error(
+      `wrote ${join(redirectDir, 'base.js')} but read back ${inspectThreshold(written)}: ` +
+        'removed the redirect rather than leave an unverified backend in place',
+    );
+  }
   await writeFile(join(redirectDir, STAMP_FILE), JSON.stringify(stamp, void 0, 2) + '\n');
-  return { wired: true, version, copiedAt: stamp.copiedAt, source: baseDir };
+  return { wired: true, version, copiedAt: stamp.copiedAt, source: baseDir, patch: plan.state };
 }
 
 /**

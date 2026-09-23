@@ -275,6 +275,19 @@ async function main() {
     });
   }
 
+  // `install.mjs` is a plain script with no build step of its own, and it imports
+  // this module by path, so the threshold decision is built as its own entry.
+  // Importing the plugin bundle instead would drag the whole plugin into a script
+  // that only has to decide one string replacement.
+  await build({
+    entryPoints: [join(here, 'src/threshold.ts')],
+    outfile: join(here, 'lib/threshold.js'),
+    ...SHARED,
+    format: 'esm',
+    platform: 'node',
+    target: 'node22',
+  });
+
   // The runtime checks import the built plugin, so they are bundled here too.
   await build({
     entryPoints: [join(here, 'test/entry.ts')],

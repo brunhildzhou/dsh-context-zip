@@ -27,6 +27,28 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 
 /**
+ * The threshold expression the shipped backend carries from 0.1.7 on, verbatim.
+ *
+ * Spelled out here instead of imported from the plugin: these checks are about
+ * the bytes the harness ships, and a literal that came from the same module the
+ * plugin patches would agree with a wrong anchor.
+ */
+const THRESHOLD_MIN_LITERAL =
+  'Math.floor(Math.min(contextWindow * policy.thresholdRatio, pressureBudgetTokens))';
+/** The form 0.1.5 through 0.1.6-alpha.2 shipped, and the one the plugin writes. */
+const THRESHOLD_RATIO_LITERAL = 'Math.floor(contextWindow * policy.thresholdRatio)';
+/**
+ * A stand-in for the shipped backend entry.
+ *
+ * Both wiring paths verify the threshold expression before writing anything, so a
+ * fixture standing in for the backend has to carry it. A stub without it is
+ * refused, and that refusal has its own check.
+ */
+const SHIPPED_ENTRY_STUB = `const thresholdTokens = ${THRESHOLD_MIN_LITERAL};\n`;
+/** The same stub after the plugin's single replacement. */
+const SHIPPED_ENTRY_PATCHED = `const thresholdTokens = ${THRESHOLD_RATIO_LITERAL};\n`;
+
+/**
  * Import the subject under test from `--installed <plugin dir>` when given, and
  * from this repository's own build output otherwise.
  *
@@ -2413,7 +2435,12 @@ try {
         join(shippedDir, 'package.json'),
         JSON.stringify({ name: REDIRECT_PACKAGE, version: '9.9.9-shipped', exports: { '.': { default: './index.js' } } }),
       );
-      await writeFile(join(shippedDir, 'index.js'), 'export const BasicCompactionEngine = 1;\n');
+      // The backend this wiring wraps carries the 0.1.7 threshold expression: the
+      // wiring path verifies it before writing anything, so a fixture without it
+      // would exercise the refusal instead of the wiring.
+      const shippedEntry = `export const BasicCompactionEngine = 1;\nconst thresholdTokens = ${THRESHOLD_MIN_LITERAL};\n`;
+      const shippedPatched = `export const BasicCompactionEngine = 1;\nconst thresholdTokens = ${THRESHOLD_RATIO_LITERAL};\n`;
+      await writeFile(join(shippedDir, 'index.js'), shippedEntry);
       await writeFile(
         join(pluginDir, 'redirect', 'package.json'),
         JSON.stringify({ name: REDIRECT_PACKAGE, version: `0.1.0-${REDIRECT_MARKER}`, private: true, type: 'module', main: 'index.js' }),
@@ -2454,9 +2481,11 @@ try {
         await readFile(join(redirectDir, 'package.json'), 'utf8'),
         await readFile(join(pluginDir, 'redirect', 'package.json'), 'utf8'),
       );
-      is('wire action: base.js 是真实后端的入口内容', await readFile(join(redirectDir, 'base.js'), 'utf8'), 'export const BasicCompactionEngine = 1;\n');
+      const wiredBase = await readFile(join(redirectDir, 'base.js'), 'utf8');
+      is('wire action: base.js 是真实后端的入口内容，只换掉那一行阈值', wiredBase, shippedPatched);
+      is('wire action: base.js 里不再有 0.1.7 的第二项', wiredBase.includes(THRESHOLD_MIN_LITERAL), false);
       const stamp = JSON.parse(await readFile(join(redirectDir, STAMP_FILE), 'utf8'));
-      is('wire action: 戳的键与 install.mjs 一致', Object.keys(stamp).sort().join(','), ['copiedAt', 'package', 'source', 'version'].sort().join(','));
+      is('wire action: 戳的键与 install.mjs 一致', Object.keys(stamp).sort().join(','), ['copiedAt', 'package', 'patch', 'source', 'version'].sort().join(','));
       is('wire action: 戳点名被包装的包', stamp.package, REDIRECT_PACKAGE);
       is('wire action: 戳记下后端版本', stamp.version, '9.9.9-shipped');
       is('wire action: 戳记下后端目录', stamp.source, shippedDir);
@@ -2468,6 +2497,11 @@ try {
       is('wire action: 接线后状态报时间', after.copiedAt, stamp.copiedAt);
       is('wire action: 接线后状态同时报内置当前的版本', after.current, '9.9.9-shipped');
       is('wire action: 后端没换时不报落后', after.stale, false);
+      is('wire action: 接线回报补丁状态', done.patch, 'ratio-only');
+      is('wire action: 戳记下补丁状态', stamp.patch, 'ratio-only');
+      is('wire action: 状态报补丁状态', after.patch, 'ratio-only');
+      is('wire action: 状态回读 base.js 的形态', after.patchObserved, 'ratio-only');
+      is('wire action: 状态不报补丁漂移', after.patchDrift, false);
 
       // ── 幂等：第二次接线的结果与第一次逐字节相同（戳的时间除外） ────────────
       const firstSet = (await readdir(redirectDir)).sort().join(',');
@@ -2479,6 +2513,33 @@ try {
       is('wire action: 第二次接线 index.js 内容不变', await readFile(join(redirectDir, 'index.js'), 'utf8'), firstIndex);
       is('wire action: 第二次接线 base.js 内容不变', await readFile(join(redirectDir, 'base.js'), 'utf8'), firstBase);
       is('wire action: 第二次接线后仍是已接线', (await readWireStatus(options)).wired, true);
+
+      // ── 后端认不出：拒绝，且已接好的 redirect 原封不动 ──────────────────────
+      await writeFile(join(shippedDir, 'index.js'), 'module.exports = {};\n');
+      // 拒绝的判据是「原封不动」，所以基线取拒绝前那一刻的戳，而不是首次接线的那个：
+      // 上面的幂等段又接了一次线，戳的时间已经刷新过一次。
+      const stampBeforeRefusal = await readFile(join(redirectDir, STAMP_FILE), 'utf8');
+      let refusedMessage = '';
+      try {
+        await wireCompactionRow(options);
+      } catch (error) {
+        refusedMessage = String(error?.message ?? error);
+      }
+      ok('wire action: 后端认不出时拒绝接线', refusedMessage.includes('does not carry the threshold expression'));
+      is('wire action: 拒绝之后旧 base.js 原封不动', await readFile(join(redirectDir, 'base.js'), 'utf8'), firstBase);
+      is('wire action: 拒绝之后戳没被改写', await readFile(join(redirectDir, STAMP_FILE), 'utf8'), stampBeforeRefusal);
+      is('wire action: 拒绝之后状态仍报已接线', (await readWireStatus(options)).wired, true);
+
+      // ── 旧式后端（0.1.5 到 0.1.6-alpha.2）：不需要补，原样接线 ───────────────
+      const oldFormEntry = `const thresholdTokens = ${THRESHOLD_RATIO_LITERAL};\n`;
+      await writeFile(join(shippedDir, 'index.js'), oldFormEntry);
+      const oldForm = await wireCompactionRow(options);
+      is('wire action: 旧式后端报不需要补', oldForm.patch, 'not-needed');
+      is('wire action: 旧式后端原样接线', await readFile(join(redirectDir, 'base.js'), 'utf8'), oldFormEntry);
+      is('wire action: 旧式后端状态不报漂移', (await readWireStatus(options)).patchDrift, false);
+      // 夹具恢复成 0.1.7 后端，后面的段落按原样继续。
+      await writeFile(join(shippedDir, 'index.js'), shippedEntry);
+      await wireCompactionRow(options);
 
       // ── 内置后端换版：戳还是旧的，「待更新」那一态要把两个版本都拿到 ─────────
       await writeFile(
@@ -5380,7 +5441,7 @@ try {
     join(linkedHome, 'node_modules', '@deepseek-ai', 'dsh-compaction-basic', 'package.json'),
     JSON.stringify({ name: '@deepseek-ai/dsh-compaction-basic', version: '9.9.9-shipped', main: 'index.js' }),
   );
-  await writeFile(join(linkedHome, 'node_modules', '@deepseek-ai', 'dsh-compaction-basic', 'index.js'), 'module.exports = {};\n');
+  await writeFile(join(linkedHome, 'node_modules', '@deepseek-ai', 'dsh-compaction-basic', 'index.js'), SHIPPED_ENTRY_STUB);
   await writeFile(
     join(realHome, 'profiles-real', 'web', 'package.json'),
     JSON.stringify({ name: 'web', dsh: { profile: { bundles: [] } } }),
@@ -5433,7 +5494,7 @@ try {
     join(shippedStub, 'package.json'),
     JSON.stringify({ name: '@deepseek-ai/dsh-compaction-basic', version: '9.9.9-shipped', main: 'index.js' }),
   );
-  await writeFile(join(shippedStub, 'index.js'), 'module.exports = {};\n');
+  await writeFile(join(shippedStub, 'index.js'), SHIPPED_ENTRY_STUB);
   const oddInstall = runInstaller(['--profile-dir', odd]);
   is('installer: the unrecognisable profile still takes a real install', oddInstall.status, 0);
 
@@ -5534,15 +5595,15 @@ try {
       join(shippedStub, 'package.json'),
       JSON.stringify({ name: '@deepseek-ai/dsh-compaction-basic', version: '9.9.9-shipped', main: 'index.js' }),
     );
-    await writeFile(join(shippedStub, 'index.js'), 'module.exports = {};\n');
+    await writeFile(join(shippedStub, 'index.js'), SHIPPED_ENTRY_STUB);
     return {
       profileDir,
       pluginDir,
       redirectDir: join(profileDir, 'node_modules', '@deepseek-ai', 'dsh-compaction-basic'),
     };
   };
-  const runCopy = (copyDir, profileDir) => {
-    const result = spawnSync(process.execPath, [join(copyDir, 'install.mjs'), '--profile-dir', profileDir], {
+  const runCopy = (copyDir, profileDir, extra = []) => {
+    const result = spawnSync(process.execPath, [join(copyDir, 'install.mjs'), '--profile-dir', profileDir, ...extra], {
       encoding: 'utf8',
     });
     return { status: result.status, out: `${result.stdout ?? ''}${result.stderr ?? ''}` };
@@ -5579,6 +5640,77 @@ try {
       stamp = null;
     }
     is('installer node_modules: 重定向戳指向装上的后端', stamp?.version, '9.9.9-shipped');
+    is('installer node_modules: 戳记下补丁状态', stamp?.patch, 'ratio-only');
+    const installedBase = await readFile(join(fixed.redirectDir, 'base.js'), 'utf8');
+    is('installer node_modules: 装上的 base.js 只换掉那一行阈值', installedBase, SHIPPED_ENTRY_PATCHED);
+    is('installer node_modules: 装上的 base.js 里没有 0.1.7 的第二项', installedBase.includes(THRESHOLD_MIN_LITERAL), false);
+    is('installer node_modules: 安装输出报了补丁状态', installed.out.includes('threshold patch: ratio-only'), true);
+
+    // `--check` 也看补丁：刚装好应报同步，把 base.js 改回未补的形态必须报落后。
+    const checked = runCopy(fixedCopy, fixed.profileDir, ['--check']);
+    is('installer --check: 刚装好时报同步', checked.status, 0);
+    is('installer --check: 输出里有补丁状态行', checked.out.includes('redirect patch  ratio-only'), true);
+    await writeFile(join(fixed.redirectDir, 'base.js'), SHIPPED_ENTRY_STUB);
+    const drifted = runCopy(fixedCopy, fixed.profileDir, ['--check']);
+    is('installer --check: base.js 被改回未补形态时报落后', drifted.status, 1);
+    is('installer --check: 落后时点名 base.js 的实际形态', drifted.out.includes('base.js carries stock'), true);
+    await writeFile(join(fixed.redirectDir, 'base.js'), installedBase);
+
+    // 认不出的后端：默认拒绝且什么都不动，`--stock-backend` 是显式的兜底开关。
+    const stock = await makeProfile('stock');
+    const stockStub = resolve(stock.profileDir, '..', '..', 'node_modules', '@deepseek-ai', 'dsh-compaction-basic');
+    await writeFile(join(stockStub, 'index.js'), 'module.exports = {};\n');
+    const refusedInstall = runCopy(fixedCopy, stock.profileDir);
+    is('installer 兜底: 后端认不出时安装失败', refusedInstall.status === 0, false);
+    is('installer 兜底: 拒绝理由点名阈值表达式', refusedInstall.out.includes('does not carry the threshold expression'), true);
+    is('installer 兜底: 拒绝时没有留下重定向', existsSyncSafe(stock.redirectDir), false);
+    is('installer 兜底: 拒绝时没删掉已装的插件目录', existsSyncSafe(stock.pluginDir), true);
+    const stocked = runCopy(fixedCopy, stock.profileDir, ['--stock-backend']);
+    is('installer 兜底: --stock-backend 时装上未补后端', stocked.status, 0);
+    is('installer 兜底: 戳记下 none', JSON.parse(await readFile(join(stock.redirectDir, 'base.json'), 'utf8')).patch, 'none');
+    is(
+      'installer 兜底: 装上的就是后端原样',
+      await readFile(join(stock.redirectDir, 'base.js'), 'utf8'),
+      'module.exports = {};\n',
+    );
+
+    // 真实布局：装过一次之后，profile 自己那份后端被重定向顶替，真身留在 store 里，
+    // 不在 Node 的查找路径上。第二次安装必须靠戳里记的 source 才找得到要拷贝的东西，
+    // 否则「刷新这份拷贝」的命令自己读不到源，装过一次就再也装不了。
+    const rerun = await makeProfile('rerun');
+    is('installer 覆盖安装: 首次安装成功', runCopy(fixedCopy, rerun.profileDir).status, 0);
+    const rerunHome = resolve(rerun.profileDir, '..', '..');
+    const rerunStub = join(rerunHome, 'node_modules', '@deepseek-ai', 'dsh-compaction-basic');
+    const rerunStore = join(rerunHome, 'store', '@deepseek-ai', 'dsh-compaction-basic');
+    await mkdir(dirname(rerunStore), { recursive: true });
+    await cp(rerunStub, rerunStore, { recursive: true });
+    await rm(rerunStub, { recursive: true, force: true });
+    const rerunStampPath = join(rerun.redirectDir, 'base.json');
+    const rerunStamp = JSON.parse(await readFile(rerunStampPath, 'utf8'));
+    rerunStamp.source = rerunStore;
+    await writeFile(rerunStampPath, JSON.stringify(rerunStamp, void 0, 2) + '\n');
+    const rerunInstall = runCopy(fixedCopy, rerun.profileDir);
+    is('installer 覆盖安装: 查找路径上没有后端时靠戳里的 source 重装', rerunInstall.status, 0);
+    is('installer 覆盖安装: 重装后戳仍记补丁态', JSON.parse(await readFile(rerunStampPath, 'utf8')).patch, 'ratio-only');
+    is(
+      'installer 覆盖安装: 重装后 base.js 仍是补丁形态',
+      await readFile(join(rerun.redirectDir, 'base.js'), 'utf8'),
+      SHIPPED_ENTRY_PATCHED,
+    );
+    is('installer 覆盖安装: 重装后回到同步', runCopy(fixedCopy, rerun.profileDir, ['--check']).status, 0);
+
+    // 反向：连戳里那个 source 也没了，必须报错并指明怎么办，不许猜一个后端来装。
+    const lostStamp = JSON.parse(await readFile(rerunStampPath, 'utf8'));
+    lostStamp.source = join(rerunHome, 'store', 'gone');
+    await writeFile(rerunStampPath, JSON.stringify(lostStamp, void 0, 2) + '\n');
+    const lostRun = runCopy(fixedCopy, rerun.profileDir);
+    is('installer 覆盖安装: 两条路都断了时拒绝安装', lostRun.status === 0, false);
+    is('installer 覆盖安装: 报错指明共享层放一份真包', lostRun.out.includes('Plant a copy of the real package'), true);
+    is(
+      'installer 覆盖安装: 拒绝时旧 base.js 原封不动',
+      await readFile(join(rerun.redirectDir, 'base.js'), 'utf8'),
+      SHIPPED_ENTRY_PATCHED,
+    );
 
     // The counter-case: the same copy with the filter spelled the old way must
     // still lose the plugin directory, or this guard would pass on a no-op.

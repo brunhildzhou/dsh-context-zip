@@ -1,9 +1,39 @@
 # 发布说明
 
-**版本**：`0.1.7`
-**日期**：2026.09.23（北京时间）
+**版本**：`0.1.8`
+**日期**：2026.09.24（北京时间）
 **对应内部快照**：`内部开发快照`
 **许可**：MIT
+
+## 0.1.8 改了什么
+
+**压缩触发阈值改回只由配置里的比例决定：宿主从 `0.1.7-alpha.1` 起把压缩触发阈值改成「窗口 × 比例」与「窗口 − 输出预留 − headroom」两项取小，本机上第二项只有窗口的 51.6%，`thresholdRatio: 0.8` 被架空，压缩触发远早于配置值。插件接管压缩行时把复制过来的 `base.js` 里那一处表达式定点改回只有比例的形式，认不出的后端默认拒绝接线。同一版修掉「重定向装过一次之后就再也刷不了」的后端解析缺陷。除压缩触发时机外，分段目录、检索工具与设置面板的行为与 0.1.7 相同；界面未改，面板暂不显示补丁状态。**
+
+### 修掉：压缩触发阈值被宿主的第二项上限架空
+
+- **症状**：接管生效的 profile 上，压缩触发得比配置早得多。本机窗口 400000、请求头预留输出 128000、默认 headroom 65536，实算触发线 206464，约窗口的 51.6%；配置里 `thresholdRatio: 0.8` 本应给出 320000。
+- **根因**：宿主从 `0.1.7-alpha.1` 起把阈值写成 `Math.floor(Math.min(contextWindow * policy.thresholdRatio, pressureBudgetTokens))`，其中 `pressureBudgetTokens` 是窗口减去输出预留与 headroom。第二项比比例那一项小时，比例就不参与决定了。跨版本核对：`0.1.5-rc.3`、`0.1.6-alpha.1`、`0.1.6-alpha.2` 的阈值只有比例那一项，`0.1.7-alpha.1`、`0.1.7-alpha.2`、`0.1.7-rc.1` 是两项取小。
+- **修法**：接管压缩行时把复制出来的 `base.js` 里那一处表达式定点替换回 `Math.floor(contextWindow * policy.thresholdRatio)`。这是一处锚定字符串替换，不重新实现阈值计算，所以拷出来的 `base.js` 除那一行外与宿主原文件逐字节相同（实测 49408 字节变 49376 字节，差的正是 `Math.min(` 与 `, pressureBudgetTokens`）。命令行 `install.mjs` 与面板按钮背后的 `wireCompactionRow` 走同一份判定（`src/threshold.ts`，独立构建入口 `lib/threshold.js`），避免只改一条路径：按一下面板按钮就把未补的后端装回去。
+- **三态与护栏**：后端是两项取小时改写成比例一项，戳里记 `patch: ratio-only`；后端本来只有比例时原样拷贝，戳里记 `not-needed`（否则无法区分「宿主本来就不需要补」与「补丁没生效」，这两件事在字节层面一样）；既不是两项取小、也不是只有比例一项，或两种形态都出现多次时拒绝接线，并且在删任何东西之前就拒绝，已接好的重定向保持原样可用。命令行加 `--stock-backend` 才按原样接线（不补），戳记 `none`；面板按钮没有参数，遇到这种后端只会拒绝，报错指向这个开关。选择拦住，是因为宿主以后改了表达式的写法，替换就会落空，而落空后照旧安装的表现是「装上了、也报成功，阈值还是 51.6%」，这种失败不报错，只能靠人比对字节发现。
+- **写后自检**：写完 `base.js` 立刻读回，字节与判定不符就把重定向目录删掉再报错。这个文件就是宿主实际加载的东西，戳不能记一个字节里并不存在的状态。
+- **为什么整项去掉第二项**：128000 + 65536 = 193536，高于比例留给 0.8 的 80000，保留第二项就到不了 320000，没有中间解。
+- **`--check` 与 `/wire`**：`--check` 除原有版本比对，再读 `base.js` 的实际形态并输出一行 `redirect patch ...`；戳承诺 `ratio-only`／`not-needed` 而文件不是那个形态，或戳里没有 `patch` 键而文件是未补形态时，按落后处理，退出码 1（三种退出码不变：0 同步、1 落后、2 未安装）。它也不再因为解析不到后端而硬失败：版本读不到就报 unknown 且不据此判落后，补丁状态行照常读。`/wire` 状态新增 `patch`（戳里记的状态）、`patchObserved`（从字节回读的形态）、`patchDrift`（布尔）三个字段；界面这次没有改，面板暂不显示这三个字段。
+- **影响面**：只在接管生效的 profile 上生效，没有接管的 profile 用的仍是宿主自带的压缩行。补丁在接线时写进 profile 里那份 `base.js`，所以已经接过线的 profile 要再跑一次接线（面板按钮或 `install.mjs`）才拿得到，在那之前 `--check` 会把未补的旧重定向报成落后。代价是压缩发生得更晚、单次请求携带的上下文更大，与配置里的 `thresholdRatio: 0.8` 一致，比宿主 0.1.7 的默认行为更贵。
+- **宿主校验这一侧**：那条 `retainTokens < thresholdTokens` 只会更宽松，补丁把阈值抬高（本机 206464 到 320000），补丁前后两种都满足。小窗口模型上未补的后端更直接：窗口装不下 65536 的 headroom 时 `pressureBudgetTokens <= 0` 抛错，压缩配置构建失败；补过之后阈值只由比例决定，不再依赖 headroom。
+
+### 修掉：重定向装过一次之后就再也装不了
+
+- **症状**：重定向装上之后，刷新重定向的命令自己读不到要拷贝的源，抛 `cannot locate a shipped @deepseek-ai/dsh-compaction-basic`。这是先前就存在的缺陷，第一次真机重装才暴露。
+- **根因**：`basePackageDir()` 从 profile 出发按 Node 的查找路径找宿主后端。重定向一旦装上就顶替了 profile 里 `@deepseek-ai/dsh-compaction-basic` 这个说明符，而宿主真身在包管理器 store 里（`.pnpm` 下），不在查找路径上；查找路径上的其它候选（`DATA/profiles/node_modules`、`DATA/node_modules`、工作区 `node_modules`）也都解析不到这份包。
+- **修法**：安装路径与面板按钮路径（`wireBackendDir`）都加一层兜底：先走原有解析，失败就读戳里记的 `source`（那条路径仍在、且不带 `context-zip` 版本标记时用它）；两条都不通则拒绝安装，并提示把一份真包放到 profile 上一级的 `node_modules/@deepseek-ai/dsh-compaction-basic`。`--check` 也改用这层兜底。
+- **验证**：真机上同一条命令从抛错变为成功，安装输出 `threshold patch: ratio-only`，装完 `--check` 报 `ratio-only (base.js carries ratio-only)` 与 `in sync`、退出码 0。
+
+### 验证
+
+- **反向对照（两次）**：只把改写去掉、留着写后自检，自检当场拦住，报 `wrote .../base.js but read back stock: removed the redirect rather than leave an unverified backend in place`；把改写与写后自检一起去掉，本次新增的判据变红，说明这几条判据确实能失败。
+- **实机（隐藏桌面隔离实例，宿主 `0.1.7-rc.1`，从交付树安装）**：`--check` 报 `ratio-only (base.js carries ratio-only)`、退出码 0；`/wire` 的 `patch` 与 `patchObserved` 都是 `ratio-only`、`patchDrift` 为 `false`，`copiedAt` 早于 `processStartedAt`，说明这次启动加载的就是补丁后的后端。把 `base.js` 换回未补字节重启做对照：`--check` 报落后、退出码 1，`patchObserved` 翻成 `stock`，`patchDrift` 变 `true`。
+- **本机真实 profile**：装好并重启宿主后，3080 的 `/wire` 回报 `patch` 与 `patchObserved` 都是 `ratio-only`、`patchDrift` 为 `false`，落地 `base.js` 49376 字节，两项取小形态 0 处、只有比例形态 1 处。
+- **没验到的**：运行时阈值数字本身没有直接观测（要发一次真实模型请求），这一条只到「宿主加载并执行了补丁后的那一行」为止；`not-needed` 与「认不出后端时拒绝接线」两态在实机上没走，由套件覆盖；实机只覆盖宿主 `0.1.7-rc.1` 一个版本、一个 profile。
 
 ## 0.1.7 改了什么
 
@@ -154,7 +184,7 @@
 
 ## 套件
 
-当前 **1358** 条检查通过（源码树为运行主体，同时用 `--deliverable` 指向交付树做声明文件与来源 kind 检查）。交付树自己当运行主体时不带开发依赖，套件总数 **1344** 条，`typescript` 探针那一条按设计失败，其余 **1343** 条通过（同一棵树接上 `--deliverable .` 时总数 1354、失败仍是这一条）。跑法与覆盖范围见 `evidence/套件说明.md`。
+当前 **1396** 条检查通过（源码树为运行主体，同时用 `--deliverable` 指向交付树做声明文件与来源 kind 检查；只给 `--installed` 不给 `--deliverable` 是 **1386** 条）。发布树自己当运行主体这一档这次没跑成：发布树不带 `node_modules`，`test/build/lib/segments.js` 解析不到 `@deepseek-ai/*`，直接报 `Cannot find package '@deepseek-ai/dsh-llm'`；要跑这一档得先给发布树种 peer 软链。跑法与覆盖范围见 `evidence/套件说明.md`。
 
 ## 已验证到什么程度
 

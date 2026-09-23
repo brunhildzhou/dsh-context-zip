@@ -414,8 +414,8 @@ ${indent(bound(textOf(data.todos)))}`;
 var CLIPPED_NOTICE = "\n\n[... this one entry exceeds the character budget on its own, so only its opening is shown above; raise maxChars or read a narrower window ...]";
 var TRUNCATED_NOTICE_PREFIX = "[... transcript truncated at ";
 var CLIPPED_MIN_CHARS = 200;
-function nameRange(from, to, count) {
-  return `${count} ${count === 1 ? "entry" : "entries"} (${from === to ? `#${from}` : `#${from}..#${to}`})`;
+function nameRange(from, to, count2) {
+  return `${count2} ${count2 === 1 ? "entry" : "entries"} (${from === to ? `#${from}` : `#${from}..#${to}`})`;
 }
 function renderTranscript(events, maxChars = HISTORY_READ_MAX_CHARS, targetSeq = null) {
   const budget = clamp(maxChars, 1e3, HISTORY_READ_MAX_CHARS);
@@ -434,8 +434,8 @@ function renderTranscript(events, maxChars = HISTORY_READ_MAX_CHARS, targetSeq =
       );
     }
     if (stopAt < blocks.length) {
-      const count = blocks.length - stopAt;
-      facts.push(`${nameRange(blocks[stopAt].seq, blocks[blocks.length - 1].seq, count)} came after the cut`);
+      const count2 = blocks.length - stopAt;
+      facts.push(`${nameRange(blocks[stopAt].seq, blocks[blocks.length - 1].seq, count2)} came after the cut`);
     }
     return facts.length === 0 ? "" : `
 
@@ -516,9 +516,9 @@ function windowWasTruncated(text) {
 }
 function renderWindow(events, header, maxChars, targetSeq = null) {
   const rendered = renderTranscript(events, maxChars, targetSeq);
-  const { from, to, count, total, clipped } = rendered.shown;
-  const span = count === 0 ? "-" : `${from}..${to}`;
-  const read = count === total ? `${total} read` : `${count} of ${total} read`;
+  const { from, to, count: count2, total, clipped } = rendered.shown;
+  const span = count2 === 0 ? "-" : `${from}..${to}`;
+  const read = count2 === total ? `${total} read` : `${count2} of ${total} read`;
   const address = `events ${span} (${read}${clipped ? ", last entry cut" : ""})
 ${header}`;
   if (rendered.text.length === 0) return `${address}
@@ -1490,6 +1490,59 @@ import { createRequire } from "node:module";
 import { basename, dirname as dirname2, join as join3, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dshHomePath as dshHomePath2 } from "@deepseek-ai/dsh-home-paths";
+
+// src/threshold.ts
+var THRESHOLD_MIN_FORM = "Math.floor(Math.min(contextWindow * policy.thresholdRatio, pressureBudgetTokens))";
+var THRESHOLD_RATIO_FORM = "Math.floor(contextWindow * policy.thresholdRatio)";
+function count(haystack, needle) {
+  return haystack.split(needle).length - 1;
+}
+function inspectThreshold(text) {
+  const min = count(text, THRESHOLD_MIN_FORM);
+  const ratio = count(text, THRESHOLD_RATIO_FORM);
+  if (min === 0 && ratio === 1) return "ratio-only";
+  if (min === 1 && ratio === 0) return "stock";
+  return "unknown";
+}
+function planThreshold(source, options = {}) {
+  const observed = inspectThreshold(source);
+  if (observed === "stock") {
+    return {
+      state: "ratio-only",
+      text: source.replace(THRESHOLD_MIN_FORM, THRESHOLD_RATIO_FORM),
+      reason: "second cap removed: the threshold is the ratio alone, as 0.1.5 through 0.1.6-alpha.2 had it"
+    };
+  }
+  if (observed === "ratio-only") {
+    return {
+      state: "not-needed",
+      text: source,
+      reason: "this backend already caps by the ratio alone; nothing to change"
+    };
+  }
+  if (options.allowStock === true) {
+    return {
+      state: "none",
+      text: source,
+      reason: "backend wired unpatched (--stock-backend)"
+    };
+  }
+  throw new Error(
+    `the shipped backend does not carry the threshold expression this plugin patches (0.1.7 form \xD7${count(source, THRESHOLD_MIN_FORM)}, ratio-only form \xD7${count(source, THRESHOLD_RATIO_FORM)}): refusing to wire a redirect whose backend cannot be verified. Re-run install.mjs with --stock-backend to wire it unpatched, then update this plugin.`
+  );
+}
+function thresholdWriteMatches(text, plan) {
+  if (text !== plan.text) return false;
+  return plan.state === "none" || inspectThreshold(text) === "ratio-only";
+}
+function thresholdDrift(stamped, text) {
+  const observed = inspectThreshold(text);
+  if (stamped === "ratio-only" || stamped === "not-needed") return observed !== "ratio-only";
+  if (stamped === "none") return false;
+  return observed === "stock";
+}
+
+// src/wire.ts
 var REDIRECT_PACKAGE = "@deepseek-ai/dsh-compaction-basic";
 var REDIRECT_MARKER = "context-zip";
 var STAMP_FILE = "base.json";
@@ -1688,6 +1741,34 @@ async function basePackageDir(profileDir) {
   }
   throw new Error(`cannot locate a shipped ${REDIRECT_PACKAGE} from ${profileDir}`);
 }
+async function recordedBackendDir(redirectDir) {
+  let stamp;
+  try {
+    stamp = JSON.parse(await readFile2(join3(redirectDir, STAMP_FILE), "utf8"));
+  } catch {
+    return null;
+  }
+  const source = typeof stamp.source === "string" ? stamp.source : null;
+  if (source === null) return null;
+  try {
+    const manifest = JSON.parse(await readFile2(join3(source, "package.json"), "utf8"));
+    if (String(manifest.version ?? "").includes(REDIRECT_MARKER)) return null;
+    return source;
+  } catch {
+    return null;
+  }
+}
+async function wireBackendDir(profileDir, redirectDir) {
+  try {
+    return await basePackageDir(profileDir);
+  } catch (error) {
+    const recorded = await recordedBackendDir(redirectDir);
+    if (recorded !== null) return recorded;
+    throw new Error(
+      `${String(error?.message ?? error)}. A redirect is installed at ${redirectDir}, so this profile no longer resolves that specifier, and the source its stamp recorded is gone too. Plant a copy of the real package at ${join3(dirname2(profileDir), "node_modules", "@deepseek-ai", "dsh-compaction-basic")} and press the button again.`
+    );
+  }
+}
 async function readWireStatus(options) {
   const { baseUrl, pluginDir } = options ?? {};
   const profileDir = await resolveProfileDirectory(baseUrl, pluginDir);
@@ -1711,13 +1792,25 @@ async function readWireStatus(options) {
     stale = current !== version;
   } catch {
   }
+  let patchObserved = null;
+  let patchDrift = false;
+  try {
+    const text = await readFile2(join3(redirectDir, "base.js"), "utf8");
+    patchObserved = inspectThreshold(text);
+    patchDrift = thresholdDrift(stamp.patch, text);
+  } catch {
+    patchDrift = true;
+  }
   return {
     wired: true,
     version,
     current,
     copiedAt: typeof stamp.copiedAt === "string" ? stamp.copiedAt : null,
     stale,
-    foreign: false
+    foreign: false,
+    patch: typeof stamp.patch === "string" ? stamp.patch : null,
+    patchObserved,
+    patchDrift
   };
 }
 async function wireCompactionRow(options) {
@@ -1731,7 +1824,7 @@ async function wireCompactionRow(options) {
       `${redirectDir} holds a real ${REDIRECT_PACKAGE}, not this plugin's redirect: refusing to overwrite a package this plugin did not put there. Move that copy up to ${join3(dirname2(profileDir), "node_modules")} (the shared level, where the backend is expected) and press the button again.`
     );
   }
-  const baseDir = await basePackageDir(profileDir);
+  const baseDir = await wireBackendDir(profileDir, redirectDir);
   const baseManifest = JSON.parse(await readFile2(join3(baseDir, "package.json"), "utf8"));
   if (String(baseManifest.version ?? "").includes(REDIRECT_MARKER)) {
     throw new Error(
@@ -1739,8 +1832,9 @@ async function wireCompactionRow(options) {
     );
   }
   const baseEntry = join3(baseDir, baseManifest.exports?.["."]?.default ?? baseManifest.main);
-  const baseSource = await readFile2(baseEntry);
+  const baseSource = await readFile2(baseEntry, "utf8");
   const version = String(baseManifest.version ?? "unknown");
+  const plan = planThreshold(baseSource, { allowStock: false });
   const sourceDir = join3(pluginDir, "redirect");
   const sourceIndex = join3(sourceDir, "index.js");
   const sourceManifest = join3(sourceDir, "package.json");
@@ -1756,15 +1850,23 @@ async function wireCompactionRow(options) {
     package: REDIRECT_PACKAGE,
     version,
     source: baseDir,
-    copiedAt: (/* @__PURE__ */ new Date()).toISOString()
+    copiedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    patch: plan.state
   };
   await rm2(redirectDir, { recursive: true, force: true });
   await mkdir3(redirectDir, { recursive: true });
   await cp(sourceManifest, join3(redirectDir, "package.json"));
   await cp(sourceIndex, join3(redirectDir, "index.js"));
-  await writeFile3(join3(redirectDir, "base.js"), baseSource);
+  await writeFile3(join3(redirectDir, "base.js"), plan.text);
+  const written = await readFile2(join3(redirectDir, "base.js"), "utf8");
+  if (!thresholdWriteMatches(written, plan)) {
+    await rm2(redirectDir, { recursive: true, force: true });
+    throw new Error(
+      `wrote ${join3(redirectDir, "base.js")} but read back ${inspectThreshold(written)}: removed the redirect rather than leave an unverified backend in place`
+    );
+  }
   await writeFile3(join3(redirectDir, STAMP_FILE), JSON.stringify(stamp, void 0, 2) + "\n");
-  return { wired: true, version, copiedAt: stamp.copiedAt, source: baseDir };
+  return { wired: true, version, copiedAt: stamp.copiedAt, source: baseDir, patch: plan.state };
 }
 var IMPORTED_SETTINGS = "settings.yaml.imported";
 var LIVE_SETTINGS = "settings.yaml";
@@ -2818,14 +2920,14 @@ function locateTermHits(body, terms) {
     if (needle.length === 0) return { term, count: 0, firstAt: -1 };
     const at = haystack.indexOf(needle);
     if (at === -1) return { term, count: 0, firstAt: -1 };
-    let count = 1;
+    let count2 = 1;
     for (let from = at + 1; ; ) {
       const next = haystack.indexOf(needle, from);
       if (next === -1) break;
-      count += 1;
+      count2 += 1;
       from = next + 1;
     }
-    return { term, count, firstAt: at };
+    return { term, count: count2, firstAt: at };
   });
 }
 function clampContext(value) {

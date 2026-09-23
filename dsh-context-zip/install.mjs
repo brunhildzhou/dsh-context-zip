@@ -42,6 +42,11 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// The threshold decision lives in `src/threshold.ts` and is imported from its
+// build output, because the settings panel's wiring path has to make the very
+// same decision. Two copies would drift, and the copy that drifted would install
+// an unpatched backend without saying so.
+import { inspectThreshold, planThreshold, thresholdDrift, thresholdWriteMatches } from './lib/threshold.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PLUGIN = 'dsh-context-zip';
@@ -746,6 +751,58 @@ async function basePackageDir() {
   throw new Error(`cannot locate a shipped @deepseek-ai/dsh-compaction-basic from ${profileDir}`);
 }
 
+/**
+ * The `source` an installed redirect recorded, when that path still holds a real
+ * package.
+ *
+ * @returns the recorded package directory, or `null`.
+ */
+async function recordedBackendDir() {
+  let stamp;
+  try {
+    stamp = JSON.parse(await readFile(join(redirectDir, 'base.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+  const source = typeof stamp.source === 'string' ? stamp.source : null;
+  if (source === null) return null;
+  try {
+    const manifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'));
+    // A recorded path that now carries a redirect is not the shipped backend.
+    if (String(manifest.version ?? '').includes('context-zip')) return null;
+    return source;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where the shipped backend can be read from.
+ *
+ * Node resolution only answers this while the profile's own copy of the
+ * specifier is still the real package. A installed redirect REPLACES that copy,
+ * and under a package manager's layout the real one sits in the store, off every
+ * lookup path. Resolution then fails, which would mean a profile could never be
+ * installed over a second time: the very command that refreshes the copy could
+ * not read the thing it copies. The stamp written beside `base.js` records where
+ * that copy came from, and that is the one pointer left.
+ *
+ * @returns the absolute package directory.
+ */
+async function shippedBackendDir() {
+  try {
+    return await basePackageDir();
+  } catch (error) {
+    const recorded = await recordedBackendDir();
+    if (recorded !== null) return recorded;
+    throw new Error(
+      `${String(error?.message ?? error)}. A redirect is installed at ${redirectDir}, so this ` +
+        'profile no longer resolves that specifier, and the source its stamp recorded is gone too. ' +
+        `Plant a copy of the real package at ${join(dirname(profileDir), 'node_modules', '@deepseek-ai', 'dsh-compaction-basic')} and re-run.`,
+    );
+  }
+}
+
 if (args.check === true) {
   // Runs before anything is deleted: the stamp lives inside the redirect
   // directory that the install path removes first.
@@ -757,21 +814,48 @@ if (args.check === true) {
     process.stdout.write(`no redirect stamp at ${stampPath}: ${PLUGIN} is not installed in ${profileDir}\n`);
     process.exit(2);
   }
-  const shippedDir = await basePackageDir();
-  const shipped = JSON.parse(await readFile(join(shippedDir, 'package.json'), 'utf8'));
-  const shippedVersion = String(shipped.version ?? 'unknown');
-  const drift = current.version !== shippedVersion;
+  // A read-only check never fails over an unresolvable backend: the stamp is what
+  // the panel prints, and the threshold line below is read from `base.js`, which
+  // does not depend on the backend at all. A version that cannot be read is
+  // reported as unknown and is not used to judge drift.
+  let shippedDir = null;
+  let shippedVersion = 'unknown';
+  try {
+    shippedDir = await shippedBackendDir();
+    const shipped = JSON.parse(await readFile(join(shippedDir, 'package.json'), 'utf8'));
+    shippedVersion = String(shipped.version ?? 'unknown');
+  } catch {
+    shippedDir = null;
+  }
+  const drift = shippedVersion !== 'unknown' && current.version !== shippedVersion;
+  // The threshold edit is judged from the bytes on disk, not from the stamp: a
+  // redirect whose `base.js` lost the patch behaves like an unpatched one, and
+  // that is the state this line exists to catch.
+  let patchDrift = false;
+  let patchLine;
+  try {
+    const text = await readFile(join(redirectDir, 'base.js'), 'utf8');
+    const observed = inspectThreshold(text);
+    patchDrift = thresholdDrift(current.patch, text);
+    patchLine = patchDrift
+      ? `redirect patch  expected ${String(current.patch ?? 'ratio-only')}, base.js carries ${observed}: re-run without --check to rewrite it`
+      : `redirect patch  ${String(current.patch ?? 'unrecorded')} (base.js carries ${observed})`;
+  } catch {
+    patchDrift = true;
+    patchLine = 'redirect patch  unknown: base.js is unreadable';
+  }
   process.stdout.write(
     [
       `redirect wraps  ${current.package}@${current.version}  (copied ${current.copiedAt})`,
-      `harness ships   ${shippedVersion}  at ${shippedDir}`,
-      drift
+      `harness ships   ${shippedVersion}  at ${shippedDir ?? 'a path that no longer resolves (version unjudged)'}`,
+      patchLine,
+      drift || patchDrift
         ? 'STALE: the backend changed since this redirect was installed; re-run without --check to refresh it'
         : 'in sync',
       '',
     ].join('\n'),
   );
-  process.exit(drift ? 1 : 0);
+  process.exit(drift || patchDrift ? 1 : 0);
 }
 
 // Nothing below this line reads or writes through an unchecked path. The first
@@ -796,8 +880,14 @@ await assertRedirectIsOurs('install over');
 // The manifest is not under `node_modules`, and a symlinked file escapes a
 // directory-level guard, so it is checked on its own.
 await assertFileInsideProfile(manifestPath, 'the profile manifest');
-await rm(redirectDir, { recursive: true, force: true });
-const baseDir = await basePackageDir();
+
+// Everything this install READS happens before the first removal, and the
+// threshold decision belongs there: a backend this plugin cannot verify has to
+// stop the install while the previous redirect is still standing, which is the
+// same promise the panel's wiring path makes when it refuses. `basePackageDir`
+// cannot answer once a redirect is installed (see `shippedBackendDir`), so the
+// stamp's recorded source stands in for it on a re-install.
+const baseDir = await shippedBackendDir();
 const baseManifest = JSON.parse(await readFile(join(baseDir, 'package.json'), 'utf8'));
 
 if (baseManifest.version?.includes('context-zip') === true) {
@@ -806,13 +896,25 @@ if (baseManifest.version?.includes('context-zip') === true) {
   );
 }
 const baseEntry = join(baseDir, baseManifest.exports?.['.']?.default ?? baseManifest.main);
-const baseSource = await readFile(baseEntry);
+const baseSource = await readFile(baseEntry, 'utf8');
 const baseVersion = String(baseManifest.version ?? 'unknown');
+// Throws when the backend carries neither threshold form, unless
+// `--stock-backend` asked for the unpatched copy on purpose.
+const plan = planThreshold(baseSource, { allowStock: args['stock-backend'] === true });
 
-// `base.js` is a COPY taken now. Upgrade the harness later and the redirect keeps
-// wrapping the backend as it was at this moment, silently. The stamp is what
-// makes that visible; `--check` compares it against what resolves today.
-const stamp = { package: '@deepseek-ai/dsh-compaction-basic', version: baseVersion, source: baseDir, copiedAt: new Date().toISOString() };
+await rm(redirectDir, { recursive: true, force: true });
+
+// `base.js` is a COPY taken now, carrying the single threshold edit described in
+// `src/threshold.ts`. Upgrade the harness later and the redirect keeps wrapping
+// the backend as it was at this moment, silently. The stamp is what makes that
+// visible; `--check` compares it against what resolves today.
+const stamp = {
+  package: '@deepseek-ai/dsh-compaction-basic',
+  version: baseVersion,
+  source: baseDir,
+  copiedAt: new Date().toISOString(),
+  patch: plan.state,
+};
 
 await rm(pluginDir, { recursive: true, force: true });
 await rm(engineDir, { recursive: true, force: true });
@@ -844,7 +946,19 @@ await cp(here, pluginDir, {
 await mkdir(join(redirectDir), { recursive: true });
 await cp(join(here, 'redirect', 'package.json'), join(redirectDir, 'package.json'));
 await cp(join(here, 'redirect', 'index.js'), join(redirectDir, 'index.js'));
-await writeFile(join(redirectDir, 'base.js'), baseSource);
+await writeFile(join(redirectDir, 'base.js'), plan.text);
+// Read back what the harness would actually load. The bytes are the contract, so
+// a mismatch removes the redirect instead of leaving an unverified backend in
+// place; with the redirect gone the row resolves the real package, which is the
+// honest state to be in.
+const written = await readFile(join(redirectDir, 'base.js'), 'utf8');
+if (!thresholdWriteMatches(written, plan)) {
+  await rm(redirectDir, { recursive: true, force: true });
+  throw new Error(
+    `wrote ${join(redirectDir, 'base.js')} but read back ${inspectThreshold(written)}: ` +
+      'removed the redirect rather than leave an unverified backend in place',
+  );
+}
 await writeFile(join(redirectDir, 'base.json'), JSON.stringify(stamp, void 0, 2) + '\n');
 
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
@@ -859,6 +973,7 @@ process.stdout.write(
     `installed into ${profileDir}`,
     `  ${PLUGIN}       (the plugin)`,
     `  ${REDIRECT}  (row redirect, wrapping ${baseVersion} from ${baseDir})`,
+    `  threshold patch: ${plan.state} (${plan.reason})`,
     `  profile bundle list now: ${manifest.dsh.profile.bundles.join(', ')}`,
     'restart the harness for the row swap to take effect',
     '',

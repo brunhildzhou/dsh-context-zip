@@ -25,6 +25,7 @@
  *
  * @module dsh-context-zip/wire
  */
+import type { ObservedState } from './threshold.ts';
 /** The package name the `compaction-basic` row resolves. */
 export declare const REDIRECT_PACKAGE = "@deepseek-ai/dsh-compaction-basic";
 /**
@@ -102,6 +103,9 @@ export declare function readWireStatus(options: any): Promise<{
     foreign: boolean;
     partial?: undefined;
     current?: undefined;
+    patch?: undefined;
+    patchObserved?: undefined;
+    patchDrift?: undefined;
 } | {
     wired: boolean;
     version: any;
@@ -110,6 +114,9 @@ export declare function readWireStatus(options: any): Promise<{
     partial: boolean;
     foreign?: undefined;
     current?: undefined;
+    patch?: undefined;
+    patchObserved?: undefined;
+    patchDrift?: undefined;
 } | {
     wired: boolean;
     version: any;
@@ -117,6 +124,9 @@ export declare function readWireStatus(options: any): Promise<{
     copiedAt: any;
     stale: boolean;
     foreign: boolean;
+    patch: any;
+    patchObserved: ObservedState;
+    patchDrift: boolean;
     partial?: undefined;
 }>;
 /**
@@ -135,7 +145,8 @@ export declare function wireCompactionRow(options: any): Promise<{
     wired: boolean;
     version: string;
     copiedAt: string;
-    source: string;
+    source: any;
+    patch: import("./threshold.ts").PatchState;
 }>;
 /**
  * Whether a settings file under `home` still carries this plugin's old section.
