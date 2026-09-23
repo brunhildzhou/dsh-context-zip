@@ -203,7 +203,12 @@ const {
   REDIRECT_PACKAGE,
   REDIRECT_MARKER,
   STAMP_FILE,
+  attentionKind,
+  attentionOf,
+  attentionPrompt,
   basePackageDir,
+  importedSettingsPending,
+  readAttention,
   readWireStatus,
   resolveProfileDirectory,
   wireCompactionRow,
@@ -374,6 +379,31 @@ async function checkDeclaredTypes(pluginRoot, label = 'exports') {
   }
 }
 
+/**
+ * Every message this plugin produces has to carry a producer-owned source kind.
+ *
+ * 0.1.7-alpha.1 deleted the shared catch-all `plugin` kind and refuses that
+ * retired literal at the session-format boundary: native V4 admission throws
+ * `format v4 message requires a producer-owned source kind` for any persisted
+ * message whose `source.kind` is exactly `plugin`, both on the way into the log
+ * and on the way out of it.
+ *
+ * A refusal there is not a degraded feature. The plugin only queues an
+ * injection (`agent.inject` returns void); the agent loop claims it later and
+ * the APPEND is what throws, so the plugin's own `try`/`catch` never sees it and
+ * the whole turn fails with the message never landing. Measured on the real
+ * profile 2026-09-23: one reminder carrying the retired kind left a session
+ * unable to accept another event, with nothing written to its log or to the
+ * plugin's log.
+ *
+ * The guard is textual because the value is derived at runtime from the plugin
+ * id (`plugin:${PLUGIN_ID}`), so there is no spelled-out value to compare
+ * against; what must never come back is the retired one.
+ *
+ * @param {string} pluginRoot - the package directory holding `package.json`.
+ * @param {string} [label] - prefix for the check labels, so a failure names
+ *   which tree it came from.
+ */
 async function checkProducerKind(pluginRoot, label = 'producer kind') {
   const artifacts = ['lib/index.js', 'engine/lib/index.js', 'engine/lib/engine.js'];
   let seen = 0;
@@ -2150,6 +2180,14 @@ try {
           if (actionThrows !== null) throw actionThrows;
           return actionAnswer;
         },
+        // 第 4 颗问号的判据：路由必须把 `readAttention` 的答案原样放进两种答复，
+        // 并且对读失败与动作失败各自带一个 forced kind。替身把 forced kind 回显，
+        // 所以这里钉住的是「路由有没有把该带的东西带上」，不是分类算法本身。
+        readAttention: async (input) => ({
+          kind: typeof input?.kind === 'string' ? input.kind : input?.status?.stale === true ? 'update' : 'inactive',
+          home: '/home/x',
+          profile: 'web',
+        }),
       },
     );
     const route = captured.find((spec) => spec.path === '/dsh-context-zip/wire');
@@ -2180,6 +2218,10 @@ try {
     is('wire route: 未接线时也带进程启动时间', typeof unwired.body.processStartedAt, 'string');
     ok('wire route: 进程启动时间可解析', Number.isFinite(Date.parse(unwired.body.processStartedAt)));
     ok('wire route: 进程启动时间不晚于此刻', Date.parse(unwired.body.processStartedAt) <= Date.now());
+    // 第 4 颗问号的数据跟着 GET 走：未接线时是 inactive，带上 home 与 profile。
+    is('wire route: GET 带上 attention', unwired.body.attention?.kind, 'inactive');
+    is('wire route: attention 带上真 home', unwired.body.attention?.home, '/home/x');
+    is('wire route: attention 带上真 profile', unwired.body.attention?.profile, 'web');
 
     statusAnswer = { wired: true, version: '0.1.5-rc.2', copiedAt: '2026-09-21T10:00:00.000Z', stale: true, foreign: false };
     const wired = await call();
@@ -2187,11 +2229,13 @@ try {
     is('wire route: 已接线时 GET 报时间', wired.body.copiedAt, '2026-09-21T10:00:00.000Z');
     is('wire route: 已接线时 GET 带落后标记', wired.body.stale, true);
     is('wire route: 已接线时 GET 也带进程启动时间', typeof wired.body.processStartedAt, 'string');
+    is('wire route: 落后的重定向把 attention 判成 update', wired.body.attention?.kind, 'update');
 
     statusThrows = new Error('no profile');
     const unreadable = await call();
     is('wire route: 状态读不到时答 500，不假装未接线', unreadable.status, 500);
     is('wire route: 状态读不到时带上原因', unreadable.body.error, 'no profile');
+    is('wire route: 状态读不到时 attention 判成 unknown', unreadable.body.attention?.kind, 'unknown');
     statusThrows = null;
 
     const wiredUp = await call({ method: 'POST', contentType: 'application/json', body: '{}' });
@@ -2203,12 +2247,14 @@ try {
     ok('wire route: POST 的进程启动时间不晚于此刻', Date.parse(wiredUp.body.processStartedAt) <= Date.now());
     is('wire route: POST 回报已接线', wiredUp.body.wired, true);
     is('wire route: POST 回报包装的版本', wiredUp.body.version, '9.9.9-shipped');
+    is('wire route: POST 也带 attention', typeof wiredUp.body.attention?.kind, 'string');
 
     actionThrows = new Error('holds a real @deepseek-ai/dsh-compaction-basic');
     const refused = await call({ method: 'POST', contentType: 'application/json', body: '{}' });
     is('wire route: 动作被拒时答 500', refused.status, 500);
     is('wire route: 动作被拒时把原因原样带给面板', refused.body.error, 'holds a real @deepseek-ai/dsh-compaction-basic');
     is('wire route: 动作被拒时不报 ok', refused.body.ok, false);
+    is('wire route: 动作被拒时 attention 判成 failed', refused.body.attention?.kind, 'failed');
     actionThrows = null;
 
     is('wire route: POST 不带 JSON 内容类型拒绝', (await call({ method: 'POST', contentType: 'text/plain' })).status, 415);
@@ -2428,8 +2474,166 @@ try {
       setHome(fbHome);
       is('wire action: 上下文没有基址时从 home 找出真正装了本插件的 profile', await resolveProfileDirectory(undefined, pluginDir), fbProfile);
       is('wire action: 基址指错时退回 home 找到的那个 profile', await resolveProfileDirectory(at(pluginDir), pluginDir), fbProfile);
+
+      // ── attention：`/wire` GET 载荷里的分类（2026.09.23） ──────────────────
+      //
+      // `null` 是「一切正常 / 没有可修的东西」，客户端据此决定画不画第 4 颗问号。
+      // `migrate` 只在两半都成立时给出：本插件那一行没有任何用户值（`rowConfigured`
+      // 为显式 false，0.1.5 那条线传 undefined）且 home 下还能读到旧的顶层
+      // `context-zip:` 段；优先级高于 inactive。读文件全程只读。
+      const attHome = join(probe, 'attention-home');
+      const attProfile = join(attHome, 'profiles', 'web');
+      await mkdir(attHome, { recursive: true });
+      await writeFile(
+        join(attHome, 'settings.yaml.imported'),
+        'llm-commandcode:\n  provider: commandcode\ncontext-zip:\n  enabled: true\n',
+      );
+      setHome(attHome);
+      const attStart = '2026-09-21T09:00:00.000Z';
+      const attStale = { wired: true, version: '0.1.5-rc.2', current: '0.1.7-alpha.1', copiedAt: '2026-09-22T12:26:23.989Z', stale: true, foreign: false };
+      const attUnwired = { wired: false, version: null, copiedAt: null, stale: false, foreign: false };
+      is(
+        'attention: 迁移没做时先报 migrate，而不是 inactive',
+        (await readAttention({ status: attUnwired, processStartedAt: attStart, profileDir: attProfile, rowConfigured: false }))?.kind,
+        'migrate',
+      );
+      is(
+        'attention: 落后的重定向压过 migrate（先重接，再谈迁移）',
+        (await readAttention({ status: attStale, processStartedAt: attStart, profileDir: attProfile, rowConfigured: false }))?.kind,
+        'update',
+      );
+      is(
+        'attention: 本插件那一行已有用户值时不再报 migrate',
+        (await readAttention({ status: { wired: false, partial: false, foreign: false }, processStartedAt: attStart, profileDir: attProfile, rowConfigured: true }))?.kind,
+        'inactive',
+      );
+      is(
+        'attention: 拿不准那一行有没有用户值时不报 migrate（0.1.5 那条线）',
+        (await readAttention({ status: { wired: false, partial: false, foreign: false }, processStartedAt: attStart, profileDir: attProfile }))?.kind,
+        'inactive',
+      );
+      is(
+        'attention: migrate 带上真 home 与真 profile',
+        JSON.stringify(await readAttention({ status: { wired: false, partial: false, foreign: false }, processStartedAt: attStart, profileDir: attProfile, rowConfigured: false })),
+        JSON.stringify({ kind: 'migrate', home: attHome, profile: 'web' }),
+      );
+      is(
+        'attention: 读失败按 unknown 报，也带真 home 与 profile',
+        JSON.stringify(await readAttention({ kind: 'unknown', profileDir: attProfile })),
+        JSON.stringify({ kind: 'unknown', home: attHome, profile: 'web' }),
+      );
+      is(
+        'attention: 接管失败按 failed 报',
+        (await readAttention({ kind: 'failed', profileDir: attProfile }))?.kind,
+        'failed',
+      );
+      is(
+        'attention: profile 名字不出来时返回 null，不编一个',
+        await readAttention({ status: { wired: false, partial: false, foreign: false }, processStartedAt: attStart, profileDir: '', rowConfigured: false }),
+        null,
+      );
+      is(
+        'attention: 已生效没有可修的东西，返回 null',
+        await readAttention({ status: { wired: true, version: 'x', copiedAt: '2026-01-01T00:00:00.000Z', stale: false, foreign: false }, processStartedAt: attStart, profileDir: attProfile, rowConfigured: true }),
+        null,
+      );
+      is(
+        'attention: 被别的实现占位也返回 null（没有可修的）',
+        await readAttention({ status: { wired: false, foreign: true }, processStartedAt: attStart, profileDir: attProfile, rowConfigured: true }),
+        null,
+      );
+      // 旧设置文件里没有本插件段，就没得迁：回落 inactive。
+      await writeFile(join(attHome, 'settings.yaml.imported'), 'llm-commandcode:\n  provider: commandcode\n');
+      is(
+        'attention: 旧设置文件里没有本插件段时不报 migrate',
+        (await readAttention({ status: { wired: false, partial: false, foreign: false }, processStartedAt: attStart, profileDir: attProfile, rowConfigured: false }))?.kind,
+        'inactive',
+      );
+      // settings.yaml 还在时也认：顶层同名段同样算。
+      await rm(join(attHome, 'settings.yaml.imported'), { force: true });
+      await writeFile(join(attHome, 'settings.yaml'), 'context-zip:\n  enabled: false\n');
+      is('attention: settings.yaml 还在时也认那段', await importedSettingsPending(attHome), true);
+      is(
+        'attention: settings.yaml 那一份也能把 kind 判成 migrate',
+        (await readAttention({ status: { wired: false, partial: false, foreign: false }, processStartedAt: attStart, profileDir: attProfile, rowConfigured: false }))?.kind,
+        'migrate',
+      );
+      // 缩进过的同名字段不是顶层段，不算；两份文件都没有时也不算。
+      const noSection = join(probe, 'no-section');
+      await mkdir(noSection, { recursive: true });
+      await writeFile(join(noSection, 'settings.yaml'), 'other:\n  context-zip:\n    enabled: true\n');
+      is('imported settings: 缩进过的同名字段不算顶层段', await importedSettingsPending(noSection), false);
+      is('imported settings: 两份文件都没有时返回 false', await importedSettingsPending(join(probe, 'no-such-home')), false);
     } finally {
       setHome(priorHome);
+      await rm(probe, { recursive: true, force: true });
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 内置后端版本的第二条解析路径（2026.09.23 缺陷）
+  //
+  // 0.1.7 升级后 profile 一级的软链还指着被删掉的旧 store，Node 从 profile 出发的
+  // 查找路径一个可读清单都找不到，`current` 就成了 null；面板按「版本未知不判落后」
+  // 落到已生效，落后的重定向被误报成正常，连「重新接管」都不出现。修法是再探一遍
+  // 运行中 harness 自己的查找路径，锚点是 `process.argv[1]`（真机上是 harness 的
+  // bin.js）。这一段用一份临时布局钉住三件事：profile 一级没有时能拿到宿主那份；
+  // 两条路径都没有时 `current` 保持 null 且不报落后；宿主那份是本插件的重定向
+  // （带 marker）时不算。
+  // -------------------------------------------------------------------------
+  {
+    const probe = await mkdtemp(join(tmpdir(), 'zc-host-'));
+    const priorArgv1 = process.argv[1];
+    const setArgv1 = (value) => {
+      if (value === undefined) delete process.argv[1];
+      else process.argv[1] = value;
+    };
+    try {
+      const profileDir = join(probe, 'profiles', 'web');
+      const redirectDir = join(profileDir, 'node_modules', REDIRECT_PACKAGE);
+      await mkdir(redirectDir, { recursive: true });
+      await writeFile(join(profileDir, 'package.json'), JSON.stringify({ name: 'web', dsh: { profile: { bundles: [] } } }));
+      await writeFile(
+        join(redirectDir, 'package.json'),
+        JSON.stringify({ name: REDIRECT_PACKAGE, version: `0.1.0-${REDIRECT_MARKER}`, private: true, type: 'module', main: 'index.js' }),
+      );
+      await writeFile(
+        join(redirectDir, STAMP_FILE),
+        JSON.stringify({ package: REDIRECT_PACKAGE, version: '0.1.5-rc.2', source: '/gone/store', copiedAt: '2026-09-22T12:26:23.989Z' }),
+      );
+      const options = { baseUrl: pathToFileURL(profileDir).href, pluginDir: probe };
+
+      // 两条路径都没有：`current` 保持 null（解析不出来不编版本），也不报落后。
+      setArgv1(join(probe, 'no-such-harness-entry.js'));
+      const unreadable = await readWireStatus(options);
+      is('backend lookup: 已接线时仍报已接线', unreadable.wired, true);
+      is('backend lookup: 两条路径都没有时 current 保持 null', unreadable.current, null);
+      is('backend lookup: 解析不出来时不敢报落后', unreadable.stale, false);
+      is('backend lookup: 戳里的快照版本照常报出', unreadable.version, '0.1.5-rc.2');
+
+      // 宿主自己的查找路径里有：拿得到，落后判出来，面板那一态才成立。
+      const hostPackage = join(probe, 'harness', 'node_modules', '.pnpm', 'node_modules', REDIRECT_PACKAGE);
+      const entry = join(probe, 'harness', 'bin.js');
+      await mkdir(hostPackage, { recursive: true });
+      await writeFile(entry, '// stand-in for the harness entry\n');
+      await writeFile(join(hostPackage, 'package.json'), JSON.stringify({ name: REDIRECT_PACKAGE, version: '0.1.7-alpha.1' }));
+      setArgv1(entry);
+      is('backend lookup: profile 一级没有时从宿主自己的查找路径解析出来', await basePackageDir(profileDir), hostPackage);
+      const upgraded = await readWireStatus(options);
+      is('backend lookup: 宿主换成 0.1.7 后读到 current', upgraded.current, '0.1.7-alpha.1');
+      is('backend lookup: 宿主换版后 stale 为 true', upgraded.stale, true);
+
+      // 宿主那份也是本插件的重定向（带 marker）：不算内置后端，仍然抛错。
+      await writeFile(join(hostPackage, 'package.json'), JSON.stringify({ name: REDIRECT_PACKAGE, version: `0.1.0-${REDIRECT_MARKER}` }));
+      let markerError = '';
+      try {
+        await basePackageDir(profileDir);
+      } catch (error) {
+        markerError = String(error?.message ?? error);
+      }
+      ok('backend lookup: 带 marker 的宿主副本不算内置后端', markerError.includes('cannot locate a shipped'));
+    } finally {
+      setArgv1(priorArgv1);
       await rm(probe, { recursive: true, force: true });
     }
   }
@@ -3728,6 +3932,75 @@ try {
   is('wire status: an unparseable process start is not a restart', wireStatusFrom({ ...restartPending, processStartedAt: 'nonsense' }, null), 'active');
   is('wire status: an equal stamp and process start are not a restart', wireStatusFrom({ ...restartPending, processStartedAt: iso }, null), 'active');
 
+  // ── attention：/wire 载荷上的分类（2026.09.23） ───────────────────────────
+  //
+  // 与 `wireStatusFrom` 读同一批事实，回答的却是「有什么要修」：`null` 是健康答案
+  // （已生效、正在接管），被别的实现占位也答 `null`，因为那里没有本插件能修的东西。
+  // 顺序先落后、再未生效/残缺/被占、最后待重启；`migrate` 由 `readAttention` 在
+  // `inactive` 之上再判一层，纯函数这里看不到。
+  is('attention kind: a stale redirect is update', attentionKind(stale, startedAfterStamp), 'update');
+  is('attention kind: an unwired row is inactive', attentionKind(unwired, startedAfterStamp), 'inactive');
+  is('attention kind: a partial redirect is incomplete', attentionKind({ ok: true, wired: false, partial: true }, startedAfterStamp), 'incomplete');
+  is('attention kind: a foreign occupant has nothing to repair', attentionKind({ ok: true, wired: false, foreign: true }, startedAfterStamp), null);
+  is('attention kind: a wired row in effect is healthy', attentionKind(wired, startedAfterStamp), null);
+  is('attention kind: a stamp newer than the process waits for a restart', attentionKind(restartPending, startedBeforeStamp), 'restart');
+  is('attention kind: a stale redirect outranks the restart branch', attentionKind({ ...restartPending, stale: true }, startedBeforeStamp), 'update');
+  is('attention kind: a missing stamp is not a restart', attentionKind({ ...restartPending, copiedAt: null }, startedBeforeStamp), null);
+  is('attention kind: an unparseable process start is not a restart', attentionKind(restartPending, 'nonsense'), null);
+  is('attention kind: a null status reads as unwired, not as a failure', attentionKind(null, startedAfterStamp), 'inactive');
+
+  // ── 提示词：一句现状 + 正文 + 复制按钮（只有正文可复制） ─────────────────
+  //
+  // 正文里的 `{home}` / `{profile}` / `{port}` 在渲染与复制时都换成真值；`restart`
+  // 没有正文也没有复制按钮，重启只能由用户做；本 build 不认识的 kind 整个不画。
+  const attentionStrings = {
+    inactiveMain: '未生效',
+    updateMain: '待更新',
+    migrateMain: '设置未迁移',
+    restartMain: '等待重启',
+    incompleteMain: '接管不完整',
+    failMain: '接管失败',
+    unknownMain: '状态未知',
+    helpTopRestart: '重启宿主后生效。',
+    promptInactive: 'A {home} {profile}',
+    promptUpdate: 'B {port}',
+    promptMigrate: 'C {home}',
+    promptRepair: 'D {state}',
+  };
+  is('attention prompt: nothing at all draws nothing', attentionPrompt(null, attentionStrings), null);
+  is('attention prompt: a payload without a kind draws nothing', attentionPrompt({ home: '/h', profile: 'p' }, attentionStrings), null);
+  const inactivePrompt = attentionPrompt({ kind: 'inactive', home: '/home/u', profile: 'web' }, attentionStrings, '3080');
+  is('attention prompt: inactive names the state word', inactivePrompt.state, '未生效');
+  is('attention prompt: the body has its placeholders filled', inactivePrompt.body, 'A /home/u web');
+  is('attention prompt: the copy text is the body itself', inactivePrompt.copyText, inactivePrompt.body);
+  is(
+    'attention prompt: the port is filled from the page',
+    attentionPrompt({ kind: 'update', home: '/h', profile: 'p' }, attentionStrings, '3080').body,
+    'B 3080',
+  );
+  is(
+    'attention prompt: migrate gets its own state word',
+    attentionPrompt({ kind: 'migrate', home: '/h', profile: 'p' }, attentionStrings, '1').state,
+    '设置未迁移',
+  );
+  is(
+    'attention prompt: the generic repair body interpolates the state',
+    attentionPrompt({ kind: 'unknown', home: '/h', profile: 'p' }, attentionStrings, '1').body,
+    'D 状态未知',
+  );
+  is(
+    'attention prompt: incomplete and failed share the generic body',
+    attentionPrompt({ kind: 'failed', home: '/h', profile: 'p' }, attentionStrings, '1').body,
+    'D 接管失败',
+  );
+  const restartPrompt = attentionPrompt({ kind: 'restart', home: '/h', profile: 'p' }, attentionStrings, '1');
+  is('attention prompt: restart has no body to copy', restartPrompt.copyText, null);
+  is('attention prompt: restart keeps its own note', restartPrompt.note, '重启宿主后生效。');
+  is('attention prompt: a kind this build cannot word draws nothing', attentionPrompt({ kind: 'nonsense', home: '/h', profile: 'p' }, attentionStrings), null);
+  is('attention payload: a kind-less object normalises to null', attentionOf({ home: '/h' }), null);
+  is('attention payload: an array is not an attention', attentionOf([]), null);
+  is('attention payload: strings survive; other types become empty', JSON.stringify(attentionOf({ kind: 'update', home: 7 })), JSON.stringify({ kind: 'update', home: '', profile: '' }));
+
   // ── 文案：九态各一对主副行；按钮只在还能做事时出现 ───────────────────────
   is('wire text: inactive offers the takeover', wireText('inactive', unwired, zh), { main: '未生效', sub: '内置压缩正在工作', action: '接管' });
   is('wire text: taking over disables itself', wireText('taking', wired, zh), { main: '正在接管', sub: '请稍候', action: '接管' });
@@ -4324,6 +4597,87 @@ try {
       /\.dsh-context-zip__wire-btn\{flex:none\}/u.test(panelSource) && /\.dsh-context-zip__row-ctl\{margin-left:auto;/u.test(panelSource),
       true,
     );
+
+    // ── 第 4 颗问号：`attention` 非 null 才渲染（2026.09.23） ───────────────
+    // 落点是标题行保存按钮之后，判定只看 `/wire` 载荷里的 `attention`：null 与
+    // `foreign` 服务端答 null，所以「没有可修的东西」与「旧服务端不发这个字段」都
+    // 落到同一个「不画」。`attention` 只随挂载与重试那两次读更新，没有新轮询。
+    const titleRowOf = (node) => {
+      if (node === null || node === undefined || typeof node !== 'object') return null;
+      if ((node.children ?? []).some((child) => child?.props?.className === 'dsh-context-zip__title')) return node;
+      for (const child of node.children ?? []) {
+        const found = titleRowOf(child);
+        if (found !== null) return found;
+      }
+      return null;
+    };
+    const topHelpOf = (tree) => (titleRowOf(tree)?.children ?? []).find((child) => child?.props?.className === 'dsh-context-zip__help');
+
+    // 没有 attention：标题行还是标题与保存按钮两个，不画第 4 颗问号。
+    wireAnswer.get = { ok: true, wired: false, version: null, copiedAt: null, stale: false, foreign: false };
+    remount();
+    tree = await paint();
+    is('attention: no attention field draws no fourth question mark', topHelpOf(tree), undefined);
+    is('attention: the title row keeps its two children', (titleRowOf(tree)?.children ?? []).length, 2);
+
+    // 服务端答 null：同样不画。
+    wireAnswer.get = { ok: true, wired: true, version: '0.1.5-rc.2', copiedAt: '2026-09-21T10:00:00.000Z', stale: false, foreign: false, attention: null };
+    remount();
+    tree = await paint();
+    is('attention: a null attention draws no fourth question mark', topHelpOf(tree), undefined);
+
+    // inactivity：画一颗，aria 与既有那颗问号同一套，点开是「现状 + 提示词 + 复制」。
+    wireAnswer.get = {
+      ok: true,
+      wired: false,
+      version: null,
+      copiedAt: null,
+      stale: false,
+      foreign: false,
+      attention: { kind: 'inactive', home: '/home/u', profile: 'web' },
+    };
+    remount();
+    tree = await paint();
+    let top = topHelpOf(tree);
+    is('attention: an inactive row draws the fourth question mark', top !== undefined, true);
+    is('attention: the fourth question mark is labelled for a repair prompt', top?.props?.['aria-label'], '查看当前接管异常的修复提示词');
+    is('attention: the fourth question mark is described by its own hidden text', top?.props?.['aria-describedby'], 'dsh-context-zip-help-top');
+    is('attention: the fourth question mark starts closed', top?.props?.['aria-expanded'], 'false');
+    click(top, 'attention: the fourth question mark has a click handler');
+    await flush();
+    tree = await paint();
+    top = topHelpOf(tree);
+    is('attention: the fourth question mark opens on click', top?.props?.['aria-expanded'], 'true');
+    const topBubbleText = textOf(findClass(tree, 'dsh-context-zip__bubble'));
+    is('attention: the bubble names the current state', topBubbleText.startsWith('当前状态：未生效。'), true);
+    is('attention: the bubble carries the repair prompt', topBubbleText.includes('dsh-context-zip@latest --legacy-peer-deps'), true);
+    is('attention: the prompt home placeholder is filled', topBubbleText.includes('/home/u/profiles/web'), true);
+    is('attention: no placeholder survives in the bubble', /[{](home|profile|port)[}]/u.test(topBubbleText), false);
+    const topCopy = findClass(findClass(tree, 'dsh-context-zip__bubble'), 'dsh-context-zip__copy');
+    is('attention: the prompt bubble offers a copy button', topCopy !== null, true);
+    is('attention: the copy button is labelled for the prompt', topCopy?.props?.['aria-label'], '复制提示词');
+    is('attention: the copy button copies the prompt body', typeof topCopy?.props?.onClick, 'function');
+
+    // restart：只有现状句与重启说明，没有正文也没有复制按钮（重启只能由用户做）。
+    wireAnswer.get = {
+      ok: true,
+      wired: true,
+      version: '0.1.7-alpha.1',
+      copiedAt: '2999-09-21T10:00:00.000Z',
+      stale: false,
+      foreign: false,
+      processStartedAt: '2026-09-21T09:00:00.000Z',
+      attention: { kind: 'restart', home: '/home/u', profile: 'web' },
+    };
+    remount();
+    tree = await paint();
+    top = topHelpOf(tree);
+    click(top, 'attention: the restart question mark has a click handler');
+    await flush();
+    tree = await paint();
+    const restartBubble = findClass(tree, 'dsh-context-zip__bubble');
+    is('attention: the restart bubble has no copy button', findClass(restartBubble, 'dsh-context-zip__copy'), null);
+    ok('attention: the restart bubble says only the user restarts', textOf(restartBubble).includes('重启宿主后生效'));
   } finally {
     globalThis.window = priorWindow;
     globalThis.document = priorDocument;

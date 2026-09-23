@@ -35,14 +35,17 @@ export {
   REDIRECT_MARKER,
   STAMP_FILE,
   assertPathInsideProfile,
+  attentionKind,
   basePackageDir,
+  importedSettingsPending,
+  readAttention,
   readWireStatus,
   resolveProfileDirectory,
   wireCompactionRow,
 } from '../src/wire.ts';
 export { createTitleMemo, TITLE_TTL_MS } from '../src/session-titles.ts';
 export { SESSION_KEY, isSessionKey } from '../src/session-key.ts';
-export { LIVE_POLL_MS, LIVE_DEDUPE_MS, MODE_DEDUPE_MS, MODE_RETRY_SCHEDULE_MS, clockText, initialLiveHealth, liveHealthAfter, liveReadDue, mergeLivePayload, modeClickIntent, modeRetryDelay, rowsAfterSave, startLivePoll, startModeReadRetry, titlesFrom, toRows, SAVE_FEEDBACK_MS, sameSettings, saveButtonEnabled, saveButtonFace, stampText, wireFace, wireStatusFrom, wireText } from '../client/live.ts';
+export { LIVE_POLL_MS, LIVE_DEDUPE_MS, MODE_DEDUPE_MS, MODE_RETRY_SCHEDULE_MS, attentionOf, attentionPrompt, clockText, initialLiveHealth, liveHealthAfter, liveReadDue, mergeLivePayload, modeClickIntent, modeRetryDelay, rowsAfterSave, startLivePoll, startModeReadRetry, titlesFrom, toRows, SAVE_FEEDBACK_MS, sameSettings, saveButtonEnabled, saveButtonFace, stampText, wireFace, wireStatusFrom, wireText } from '../client/live.ts';
 export {
   ManualTargetError,
   selectManualRange,

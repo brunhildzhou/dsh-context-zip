@@ -541,6 +541,98 @@ export function wireFace(status) {
 }
 
 /**
+ * The kinds the server's `attention` field can carry, mapped to the panel's own
+ * state word for each.
+ *
+ * The wire row prints its own status from `wireStatusFrom`, so this is a second
+ * reading of nearly the same facts — deliberately, because the two answer
+ * different questions. The row answers "what is this row", the attention bubble
+ * answers "what should be repaired", and `migrate` is the one kind the row has no
+ * word for: the redirect state is plain "inactive" while the settings that would
+ * make a takeover meaningful never came across.
+ */
+const ATTENTION_STATE_KEYS = {
+  inactive: 'inactiveMain',
+  update: 'updateMain',
+  migrate: 'migrateMain',
+  restart: 'restartMain',
+  incomplete: 'incompleteMain',
+  failed: 'failMain',
+  unknown: 'unknownMain',
+};
+
+/**
+ * Clean one `/wire` payload's `attention` field into a usable object, or `null`.
+ *
+ * Anything that is not an object with a non-empty `kind` is `null`: an older
+ * server that does not send the field, a failed read that never reached the
+ * server, and a malformed answer all have to mean "draw no question mark", which
+ * is exactly what a missing field means. `home` and `profile` are read as strings
+ * because the prompt template interpolates them; a value of the wrong type would
+ * print `undefined` into a command.
+ *
+ * @param attention - the `attention` value from a `/wire` payload.
+ * @returns `{ kind, home, profile }`, or `null`.
+ */
+export function attentionOf(attention) {
+  if (attention === null || typeof attention !== 'object' || Array.isArray(attention)) return null;
+  const kind = typeof attention.kind === 'string' ? attention.kind : '';
+  if (kind.length === 0) return null;
+  return {
+    kind,
+    home: typeof attention.home === 'string' ? attention.home : '',
+    profile: typeof attention.profile === 'string' ? attention.profile : '',
+  };
+}
+
+/** Fill `{name}` placeholders without touching any other brace. */
+function fillTemplate(text, values) {
+  let filled = text;
+  for (const [name, value] of Object.entries(values)) filled = filled.split(`{${name}}`).join(value);
+  return filled;
+}
+
+/**
+ * What the fourth question mark's bubble shows, for one attention kind.
+ *
+ * The bubble is "one line of current state + the repair prompt + a copy button",
+ * and the copy button copies the PROMPT BODY alone: the state line is context for
+ * the reader, not part of what an agent should receive. `restart` is the one kind
+ * with no prompt: only the user may restart the host, so there is nothing an agent
+ * could be asked to do and no button to press. `{home}`, `{profile}` and `{port}`
+ * come from the server's `attention` and the page's own location, so the text the
+ * user copies holds real paths rather than placeholders.
+ *
+ * @param attention - the `/wire` payload's `attention` value.
+ * @param strings - the active locale's string table.
+ * @param port - the page's port, as a string.
+ * @returns `{ kind, state, body, note, copyText }`, or `null` when there is
+ *   nothing to draw.
+ */
+export function attentionPrompt(attention, strings, port = '') {
+  const clean = attentionOf(attention);
+  if (clean === null) return null;
+  const stateKey = ATTENTION_STATE_KEYS[clean.kind];
+  // A kind this build does not know how to word is not drawn at all: a bubble with
+  // no state line and no prompt would be worse than no question mark.
+  if (stateKey === undefined) return null;
+  const state = typeof strings?.[stateKey] === 'string' ? strings[stateKey] : '';
+  const values = { home: clean.home, profile: clean.profile, port: String(port ?? ''), state };
+  const templates = {
+    inactive: strings?.promptInactive,
+    update: strings?.promptUpdate,
+    migrate: strings?.promptMigrate,
+    incomplete: strings?.promptRepair,
+    failed: strings?.promptRepair,
+    unknown: strings?.promptRepair,
+  };
+  const template = templates[clean.kind];
+  const body = typeof template === 'string' && template.length > 0 ? fillTemplate(template, values) : '';
+  const note = clean.kind === 'restart' && typeof strings?.helpTopRestart === 'string' ? strings.helpTopRestart : '';
+  return { kind: clean.kind, state, body, note, copyText: body.length > 0 ? body : null };
+}
+
+/**
  * One `MM-DD HH:mm` local rendering of a stamp's ISO time.
  *
  * `clockText` alone would print a time of day with no date, and the stamp is a

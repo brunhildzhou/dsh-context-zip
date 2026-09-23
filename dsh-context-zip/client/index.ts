@@ -10,7 +10,7 @@
  */
 
 import * as React from 'react';
-import { LIVE_POLL_MS, SAVE_FEEDBACK_MS, clockText, helpBubblePlacement, initialLiveHealth, liveHealthAfter, mergeLivePayload, modeClickIntent, sameSettings, saveButtonEnabled, saveButtonFace, startLivePoll, startModeReadRetry, titlesFrom, toRows, wireFace, wireStatusFrom, wireText } from './live.ts';
+import { attentionOf, attentionPrompt, LIVE_POLL_MS, SAVE_FEEDBACK_MS, clockText, helpBubblePlacement, initialLiveHealth, liveHealthAfter, mergeLivePayload, modeClickIntent, sameSettings, saveButtonEnabled, saveButtonFace, startLivePoll, startModeReadRetry, titlesFrom, toRows, wireFace, wireStatusFrom, wireText } from './live.ts';
 // 两条长说明只有一处原文：`src/panel-copy.ts`，schema 的 `description` 也引它。面板与
 // `settings.yaml` 里读到的那段话因此不可能各说各话（台账 B3 的口径）。
 import { FALLBACK_ENABLED_COPY, REWRITE_ENABLED_COPY } from '../src/panel-copy.ts';
@@ -209,6 +209,55 @@ const ZH = {
   unknownSub: '刚才没有读到',
   failMain: '接管失败',
   retry: '重试',
+  // ── 第 4 颗问号：接管异常时的修复提示词（2026.09.23）
+  // 服务端 `/wire` 的 `attention` 非 null 才渲染；`null`（已生效、正在接管）与
+  // `foreign`（没有可修的东西）都不显示。气泡是「一句现状 + 提示词正文 + 复制按钮」，
+  // 复制按钮复制的只有正文。正文里的 {home} / {profile} / {port} 在渲染与复制时都换
+  // 成真值，来源是 `attention` 与 `location.port`。`restart` 没有提示词：重启只能由
+  // 用户做，agent 不许碰。
+  helpTopLabel: '查看当前接管异常的修复提示词',
+  helpTopCopy: '复制提示词',
+  helpTopWhere: (state) => `当前状态：${state}。下面这段提示词可以整段复制给一个 agent，全程不需要界面操作。`,
+  helpTopRestart: '重启宿主后生效。重启这一步只能由你自己做，提示词里不会、也不应该让 agent 去重启。',
+  migrateMain: '设置未迁移',
+  promptInactive: `背景：我的 DSH 装了 dsh-context-zip，但压缩接管没生效，压缩还在走宿主内置后端。请按下面做，这些步骤都不需要界面操作。
+
+1. 确认插件在：读 {home}/profiles/{profile}/package.json，看 dependencies 里有没有 dsh-context-zip、dsh.profile.bundles 里有没有它。缺了就装：dsh plugin --profile {profile} add dsh-context-zip
+2. 写入接管（不用点界面）：
+   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
+   npm i dsh-context-zip@latest --legacy-peer-deps
+   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
+3. 自查：install.mjs 应打印 installed into …，并列出插件与重定向两行；{home}/profiles/{profile}/node_modules/@deepseek-ai/dsh-compaction-basic/ 下应有 base.js、base.json、index.js、package.json。
+4. 回报：每步命令的输出，以及 base.json 的内容。
+5. 不要自行重启 DSH。`,
+  promptUpdate: `背景：我的 dsh-context-zip 提示重定向需要更新（它包住的内置压缩后端版本比宿主旧）。请按下面做，全程不需要界面操作。
+
+1. 记现状：curl http://127.0.0.1:{port}/dsh-context-zip/wire ，把 version 与 current 报给我。
+2. 刷新重定向：
+   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
+   npm i dsh-context-zip@latest --legacy-peer-deps
+   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
+3. 再 curl 一次第 1 步的地址，确认 version 与 current 一致、stale 为 false。
+4. 回报两次返回。不要自行重启 DSH。`,
+  promptMigrate: `背景：我的 DSH 从 0.1.5/0.1.6 升到 0.1.7 之后，dsh-context-zip 的设置没跟过来（摘要兜底、摘要重排变关，已生效会话变「无」）。原因是 0.1.7 把 settings.yaml 改名成 settings.yaml.imported，只迁移白名单里的段，插件段被落下。请按下面做，全程不需要界面操作。
+
+1. 读 {home}/settings.yaml.imported（若 settings.yaml 还在就读它），把 context-zip: 那一段完整抄给我。
+2. 写进 {home}/profiles/{profile}/cordis.patch.yml，作为 id 为 dsh-context-zip 的那一行的 config。注意 id 必须是 dsh-context-zip，不是 context-zip：
+   - id: dsh-context-zip
+     config:
+       <把那段字段逐条搬过来，一个都别丢，含 agents 里所有会话 id 与 true/false>
+3. 改前备份该文件；改后用 YAML 解析器验一遍能不能解析。
+4. 自查：curl http://127.0.0.1:{port}/dsh-context-zip/settings 应返回你写进去的值。
+5. 回报：改动前后的片段 + 接口返回。不要自行重启 DSH。`,
+  promptRepair: `背景：我的 DSH 上 dsh-context-zip 的压缩接管状态异常（面板显示：{state}）。请你查清并修好，全程不需要界面操作。
+
+1. 收集现场：curl http://127.0.0.1:{port}/dsh-context-zip/wire ，把完整返回报给我；再找出 harness 启动日志里含 dsh-context-zip 的行并摘出来。
+2. 按顺序试这个修法（做完一步就回报）：
+   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
+   npm i dsh-context-zip@latest --legacy-peer-deps
+   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
+3. 自查：{home}/profiles/{profile}/node_modules/@deepseek-ai/dsh-compaction-basic/ 下应有 base.js、base.json、index.js、package.json；再 curl 一次 /dsh-context-zip/wire，stale 应为 false。
+4. 回报每步输出。不要自行重启 DSH。`,
   // ── 已生效会话（只读）
   agentsSection: '已生效会话',
   showMore: '显示更多',
@@ -323,6 +372,56 @@ const EN = {
   unknownSub: 'Could not read the status',
   failMain: 'Could not take over',
   retry: 'Retry',
+  // ── The fourth question mark: repair prompts for a takeover problem (2026.09.23)
+  // Rendered only when the server's `attention` is non-null; `null` (active, or a
+  // write in flight) and `foreign` (nothing here this plugin may repair) draw no
+  // mark. The bubble is "one line of state + the prompt body + a copy button", and
+  // the button copies the BODY alone. `{home}`, `{profile}` and `{port}` are
+  // replaced with real values from `attention` and `location.port`, in the bubble
+  // and in what is copied. `restart` has no prompt: only the user may restart.
+  helpTopLabel: 'Show the repair prompt for the current takeover problem',
+  helpTopCopy: 'Copy the prompt',
+  helpTopWhere: (state) => `Current state: ${state}. The prompt below can be copied whole to an agent; none of it needs the UI.`,
+  helpTopRestart: 'It takes effect after the host restarts. Only you can do that; the prompt will not, and should not, ask an agent to restart DSH.',
+  migrateMain: 'Settings not migrated',
+  promptInactive: `Background: my DSH has dsh-context-zip installed, but the compaction takeover is not in effect and compaction still goes through the host's built-in backend. Please do the following; none of these steps needs the UI.
+
+1. Confirm the plugin is there: read {home}/profiles/{profile}/package.json and check that dsh-context-zip is in dependencies and in dsh.profile.bundles. If it is missing, install it: dsh plugin --profile {profile} add dsh-context-zip
+2. Write the takeover (no clicking in the UI):
+   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
+   npm i dsh-context-zip@latest --legacy-peer-deps
+   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
+3. Check it yourself: install.mjs should print installed into … and list the plugin and the redirect as two lines; {home}/profiles/{profile}/node_modules/@deepseek-ai/dsh-compaction-basic/ should hold base.js, base.json, index.js and package.json.
+4. Report back: the output of every command, plus the contents of base.json.
+5. Do not restart DSH yourself.`,
+  promptUpdate: `Background: my dsh-context-zip says the redirect needs an update (the built-in compaction backend it wraps is older than the one the host ships). Please do the following; no UI steps at any point.
+
+1. Record the current state: curl http://127.0.0.1:{port}/dsh-context-zip/wire and report version and current to me.
+2. Refresh the redirect:
+   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
+   npm i dsh-context-zip@latest --legacy-peer-deps
+   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
+3. curl the address from step 1 again and confirm version and current match and stale is false.
+4. Report both answers. Do not restart DSH yourself.`,
+  promptMigrate: `Background: after my DSH was upgraded from 0.1.5/0.1.6 to 0.1.7, the dsh-context-zip settings did not come along (the mechanical summary fallback and the summary re-layout turned off, and the sessions in effect became "none"). The cause is that 0.1.7 renamed settings.yaml to settings.yaml.imported and migrates only a whitelist of sections, so the plugin section was left behind. Please do the following; no UI steps at any point.
+
+1. Read {home}/settings.yaml.imported (or settings.yaml if it is still there) and copy the whole context-zip: section back to me.
+2. Write it into {home}/profiles/{profile}/cordis.patch.yml as the config of the row whose id is dsh-context-zip. Note that the id must be dsh-context-zip, not context-zip:
+   - id: dsh-context-zip
+     config:
+       <move every field over one by one and lose none of them, including every session id under agents with its true/false>
+3. Back the file up before changing it; after the change, parse it once with a YAML parser to confirm it parses.
+4. Check it yourself: curl http://127.0.0.1:{port}/dsh-context-zip/settings should return the values you wrote.
+5. Report back: the fragments before and after the change, plus the route's answer. Do not restart DSH yourself.`,
+  promptRepair: `Background: the compaction takeover of dsh-context-zip on my DSH is in a bad state (the panel shows: {state}). Please find out why and fix it; no UI steps at any point.
+
+1. Collect the scene: curl http://127.0.0.1:{port}/dsh-context-zip/wire and report the whole answer to me; then find the lines of the harness startup log that mention dsh-context-zip and quote them.
+2. Try this repair in order (report after each step):
+   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
+   npm i dsh-context-zip@latest --legacy-peer-deps
+   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
+3. Check it yourself: {home}/profiles/{profile}/node_modules/@deepseek-ai/dsh-compaction-basic/ should hold base.js, base.json, index.js and package.json; then curl /dsh-context-zip/wire again and stale should be false.
+4. Report the output of every step. Do not restart DSH yourself.`,
   agentsSection: 'Sessions in effect',
   showMore: 'Show more',
   emptyList: 'None',
@@ -574,7 +673,7 @@ function ContextZipSection(props) {
   const [retrievalLimit, setRetrievalLimit] = React.useState(LIST_PAGE);
   /** 「实验与排障」折叠区默认收起。 */
   const [experimentOpen, setExperimentOpen] = React.useState(false);
-  /** 问号气泡：同时只开一个，值是 `'wire'` / `'fallback'` / `'rewrite'` / `null`。 */
+  /** 问号气泡：同时只开一个，值是 `'wire'` / `'top'` / `'fallback'` / `'rewrite'` / `null`。 */
   const [help, setHelp] = React.useState(null);
   /** 刚复制成功的那一行 id；1.5 秒后清掉，图标从对勾回到复制形。 */
   const [copiedId, setCopiedId] = React.useState(null);
@@ -583,6 +682,9 @@ function ContextZipSection(props) {
   const bubbleRef = React.useRef(null);
   const tipRef = React.useRef(null);
   const helpWireRef = React.useRef(null);
+  // 标题行的第 4 颗问号：只在 `/wire` 载荷的 `attention` 非 null 时渲染，所以它的
+  // ref 在没有问号时保持 null，定位 effect 对它不做任何事。
+  const helpTopRef = React.useRef(null);
   const helpFallbackRef = React.useRef(null);
   const helpRewriteRef = React.useRef(null);
   const tipTimer = React.useRef(null);
@@ -720,7 +822,16 @@ function ContextZipSection(props) {
         setWireAction(null);
         return;
       }
-      setWire((current) => ({ ...(current ?? {}), ok: true, wired: true, error: String(data?.error ?? 'unavailable') }));
+      // 被拒时服务端把 `attention` 判成 `failed`，要一起收下：第 4 颗问号的通用修法
+      // 那一支就是照着它渲染的，丢掉它就只剩上一次读数的 kind（通常是 inactive）。
+      // 网络层抛错没有载荷，那时保留上一次的 attention。
+      setWire((current) => ({
+        ...(current ?? {}),
+        ok: true,
+        wired: true,
+        error: String(data?.error ?? 'unavailable'),
+        attention: data?.attention ?? current?.attention ?? null,
+      }));
       setWireAction('failed');
     } catch (error) {
       setWire((current) => ({ ...(current ?? {}), ok: true, wired: true, error: String(error?.message ?? error) }));
@@ -761,7 +872,9 @@ function ContextZipSection(props) {
         ? helpFallbackRef.current
         : help === 'rewrite'
           ? helpRewriteRef.current
-          : helpWireRef.current;
+          : help === 'top'
+            ? helpTopRef.current
+            : helpWireRef.current;
     const bubble = bubbleRef.current;
     if (anchor === null || bubble === null) return void 0;
     const place = () => {
@@ -1278,6 +1391,37 @@ function ContextZipSection(props) {
   };
 
   /**
+   * 标题行那颗「修复提示词」问号，返回零个或一个孩子的数组。
+   *
+   * 只在 `attention` 非 null 时非空。`null` 是「已生效 / 正在接管」，被别的实现占位
+   * （`foreign`）服务端也答 `null`，两种都没有可修的东西，多一颗问号只会让人白点。
+   * 返回数组而不是 `null`，这样没问号时标题行的孩子正好还是标题与保存按钮两个；判据
+   * 盯着「那一行恰好两个、保存按钮在最后」。载荷来自挂载与「重试」那两次读，不新增轮询。
+   * 写法照抄压缩后端那一行标题里的问号，只换 ref、aria 与 setHelp 的值。
+   */
+  const attentionHelp = () => {
+    if (topPrompt === null) return [];
+    return [
+      React.createElement(
+        'button',
+        {
+          type: 'button',
+          className: 'dsh-context-zip__help',
+          ref: helpTopRef,
+          'aria-label': strings.helpTopLabel,
+          'aria-expanded': help === 'top' ? 'true' : 'false',
+          'aria-describedby': 'dsh-context-zip-help-top',
+          onClick: (event) => {
+            event.stopPropagation();
+            setHelp((open) => (open === 'top' ? null : 'top'));
+          },
+        },
+        React.createElement('span', { dangerouslySetInnerHTML: { __html: ICON_HELP } }),
+      ),
+    ];
+  };
+
+  /**
    * 重排用的两档下拉框：来源与模型。
    *
    * 已保存但**不在当前清单里**的值会被补成一个带「（不在注册表里）」字样的选项。
@@ -1356,15 +1500,29 @@ function ContextZipSection(props) {
     .filter(([key]) => isSessionKey(key))
     .map(([key, presentation]) => ({ id: key, presentation: String(presentation ?? '') }));
 
+  /**
+   * 第 4 颗问号的数据，每次渲染现算一次。
+   *
+   * `attention` 是服务端对本次 `/wire` 读数的分类，非 null 才有可修的东西；`topPrompt`
+   * 把提示词模板里的占位符换成真值，气泡正文、隐藏原文与复制按钮同用它。`port` 取页面
+   * 自己的端口（`location.port`），提示词里的 curl 地址靠它。载荷只在挂载与「重试」时
+   * 读一次，这里不新增请求。
+   */
+  const attention = attentionOf(wire?.attention);
+  const topPrompt =
+    attention === null ? null : attentionPrompt(attention, strings, typeof location === 'undefined' ? '' : location.port);
+
   /** 面板根的子节点，按预览页的分组顺序拼起来。 */
   const children: any[] = [
     // 大标题与唯一的保存按钮同一行，按钮靠最右（`.dsh-context-zip__title` 的类名与
-    // 文本有判据盯着，不能动；这里只把两者放进同一个容器）。
+    // 文本有判据盯着，不能动；这里只把两者放进同一个容器）。第 4 颗问号跟在保存按钮
+    // 后面，只有 `attention` 非 null 时才在。
     React.createElement(
       'div',
       { className: 'dsh-context-zip__title-row', key: 'title' },
       React.createElement('span', { className: 'dsh-context-zip__title' }, strings.title),
       saveButton(),
+      ...attentionHelp(),
     ),
   ];
   if (state.status === 'loading') {
@@ -1634,7 +1792,53 @@ function ContextZipSection(props) {
     );
   }
 
-  // 问号气泡、行内复制气泡，以及两条正式说明的隐藏原文（`aria-describedby` 要指向它们）。
+  /**
+   * 气泡正文，永远返回孩子数组。
+   *
+   * 三条既有说明各是一段纯文本；第 4 颗问号返回「现状句 + 提示词正文 + 复制按钮」三件，
+   * 也只有这一支带按钮。既有判据要求压缩后端那一支的正文文本仍等于 `strings.help`，
+   * 而 `textOf` 会把子节点文本拼起来，所以按钮不能进那三支。
+   *
+   * 返回数组（而不是一段文本或一段数组）是因为调用处用 `...` 展开：让数组成为
+   * `createElement` 的唯一孩子时，React 会展开它，测试用的替身不会，正文就会整段消失。
+   *
+   * `restart` 没有正文：重启只能由用户做，气泡只给现状句与那句重启说明。
+   */
+  const renderHelpBody = () => {
+    if (help === null) return [];
+    if (help === 'fallback') return [strings.fallbackHint];
+    if (help === 'rewrite') return [strings.rewriteHint];
+    if (help !== 'top' || topPrompt === null) return [strings.help];
+    const parts: any[] = [
+      React.createElement('div', { className: 'dsh-context-zip__prompt-state', key: 'state' }, strings.helpTopWhere(topPrompt.state)),
+    ];
+    if (topPrompt.body.length > 0) {
+      parts.push(React.createElement('pre', { className: 'dsh-context-zip__prompt', key: 'prompt' }, topPrompt.body));
+    }
+    if (topPrompt.note.length > 0) {
+      parts.push(React.createElement('div', { className: 'dsh-context-zip__prompt-state', key: 'note' }, topPrompt.note));
+    }
+    if (topPrompt.copyText !== null) {
+      parts.push(
+        React.createElement(
+          'div',
+          { className: 'dsh-context-zip__prompt-actions', key: 'actions' },
+          // 复制的是提示词正文全文（`copyText` 就是替换过占位符的正文），不是气泡里
+          // 那句现状，也不是带界面的东西。反馈走现成的 `__tip` 气泡。
+          React.createElement('button', {
+            type: 'button',
+            className: 'dsh-context-zip__copy',
+            'aria-label': strings.helpTopCopy,
+            onClick: (event) => copyId(topPrompt.copyText, event.currentTarget),
+            dangerouslySetInnerHTML: { __html: copiedId === 'top' ? ICON_CHECK : ICON_COPY },
+          }),
+        ),
+      );
+    }
+    return parts;
+  };
+
+  // 问号气泡、行内复制气泡，以及三条正式说明的隐藏原文（`aria-describedby` 要指向它们）。
   children.push(
     React.createElement(
       'div',
@@ -1645,7 +1849,7 @@ function ContextZipSection(props) {
         key: 'bubble',
         'data-show': help === null ? 'false' : 'true',
       },
-      help === null ? '' : help === 'fallback' ? strings.fallbackHint : help === 'rewrite' ? strings.rewriteHint : strings.help,
+      ...renderHelpBody(),
     ),
     React.createElement(
       'div',
@@ -1661,6 +1865,13 @@ function ContextZipSection(props) {
     React.createElement('div', { id: 'dsh-context-zip-help-wire', key: 'help-wire', hidden: true }, strings.help),
     React.createElement('div', { id: 'dsh-context-zip-help-fallback', key: 'help-fallback', hidden: true }, strings.fallbackHint),
     React.createElement('div', { id: 'dsh-context-zip-help-rewrite', key: 'help-rewrite', hidden: true }, strings.rewriteHint),
+    React.createElement(
+      'div',
+      { id: 'dsh-context-zip-help-top', key: 'help-top', hidden: true },
+      topPrompt === null
+        ? strings.helpTopLabel
+        : `${strings.helpTopWhere(topPrompt.state)}\n${topPrompt.body}${topPrompt.note}`,
+    ),
   );
 
   return React.createElement('div', { className: 'dsh-context-zip' }, ...children);
@@ -2150,6 +2361,9 @@ const STYLE = `
 .dsh-context-zip__help:active{background:var(--dsw-alias-interactive-bg-active)}
 .dsh-context-zip__bubble{position:fixed;z-index:var(--cz-z-bubble);width:320px;max-width:calc(100vw - 24px);background:var(--dsw-alias-bg-layer-3);border:1px solid var(--dsw-alias-border-l2);border-radius:var(--cz-radius-surface);padding:10px 12px;font-size:var(--cz-font-sm);line-height:1.6;color:var(--dsw-alias-label-primary);box-shadow:var(--cz-shadow-surface);text-wrap:pretty;display:none}
 .dsh-context-zip__bubble[data-show="true"]{display:block}
+.dsh-context-zip__prompt-state{margin:0 0 6px;color:var(--dsw-alias-label-primary)}
+.dsh-context-zip__prompt{margin:0 0 6px;max-height:44vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:inherit;font-size:var(--cz-font-sm);line-height:var(--cz-line-sm);color:var(--dsw-alias-label-secondary)}
+.dsh-context-zip__prompt-actions{display:flex;justify-content:flex-end;margin-top:2px}
 
 /* 分段结果 */
 .dsh-context-zip__segments{margin:var(--cz-gap-sm) 0 0;padding:10px 12px;border-radius:var(--cz-radius-control);background:var(--dsw-alias-interactive-bg-hover);font-family:var(--cz-font-code);font-size:var(--cz-font-sm);line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:200px;overflow:auto}

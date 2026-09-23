@@ -331,6 +331,47 @@ async function readStamp(redirectDir) {
 }
 
 /**
+ * The `node_modules` directories the harness process itself would resolve from.
+ *
+ * A 0.1.7 upgrade rewrites the harness's own store and re-links only the harness
+ * tree. Measured on this machine after the 0.1.7 install: the profile-level
+ * `profiles/node_modules/@deepseek-ai/dsh-compaction-basic` link still points at
+ * the removed `0.1.5-rc.2` store directory, so Node's profile lookup paths find
+ * nothing at all, while the backend the harness actually ships sits in the same
+ * pnpm store as the running harness. Skipping the host half therefore made the
+ * shipped version unreadable exactly when it had changed, which is the one moment
+ * the comparison exists for.
+ *
+ * The anchor is the running process's entry point (`process.argv[1]`), resolved
+ * through symlinks: the harness bin is a real path here, and a launcher that
+ * reaches it through a symlink still lands in the store. Every ancestor's
+ * `node_modules` and pnpm's `.pnpm/node_modules` hoist are probed. Nothing is
+ * guessed from the home directory: a directory counts only when a readable
+ * manifest is found there, and the version-marker check in
+ * {@link basePackageDir} still rejects this plugin's own redirect.
+ *
+ * @returns candidate `node_modules` directories, nearest ancestor first.
+ */
+async function hostLookupBases() {
+  const entry = process.argv?.[1];
+  if (typeof entry !== 'string' || entry.length === 0) return [];
+  let started;
+  try {
+    started = await realpath(entry);
+  } catch {
+    started = resolve(entry);
+  }
+  const bases = [];
+  for (let dir = dirname(started); ; dir = dirname(dir)) {
+    bases.push(join(dir, 'node_modules'));
+    bases.push(join(dir, 'node_modules', '.pnpm', 'node_modules'));
+    const parent = dirname(dir);
+    if (parent === dir) break;
+  }
+  return bases;
+}
+
+/**
  * Locate the installed base package by probing Node's own lookup paths.
  *
  * `require.resolve` cannot be used: the package may not export `./package.json`,
@@ -338,12 +379,24 @@ async function readStamp(redirectDir) {
  * version carries the redirect marker is skipped for the same reason, which is
  * what makes it safe to resolve the backend while a redirect is already in place.
  *
+ * The profile's own lookup paths are tried FIRST, because on a healthy profile
+ * the backend the `compaction-basic` row would load is the one beside the plugin,
+ * and the checks below are about that copy. When none of them answers (a dangling
+ * link after an upgrade is not a readable manifest) the harness's own lookup
+ * paths are tried, so the shipped version stays knowable on 0.1.7. Both halves
+ * read a manifest and reject the redirect marker; a run that finds neither still
+ * throws rather than inventing a version.
+ *
  * @param profileDir - the profile directory.
  * @returns the absolute package directory.
  */
 export async function basePackageDir(profileDir) {
   const require = createRequire(join(profileDir, 'package.json'));
-  for (const base of require.resolve.paths(REDIRECT_PACKAGE) ?? []) {
+  const bases = [...(require.resolve.paths(REDIRECT_PACKAGE) ?? [])];
+  for (const base of await hostLookupBases()) {
+    if (!bases.includes(base)) bases.push(base);
+  }
+  for (const base of bases) {
     const candidate = join(base, REDIRECT_PACKAGE);
     let manifest;
     try {
@@ -483,4 +536,144 @@ export async function wireCompactionRow(options) {
   return { wired: true, version, copiedAt: stamp.copiedAt, source: baseDir };
 }
 
-export default { resolveProfileDirectory, readWireStatus, wireCompactionRow, basePackageDir, REDIRECT_PACKAGE };
+/**
+ * The settings file a 0.1.7 upgrade renames the live one into.
+ *
+ * The upgrade migrates only a whitelist of sections, so a plugin's own section
+ * can be left in this file and never reach the profile row that now holds plugin
+ * settings. That is the state the `migrate` attention kind exists to name.
+ */
+const IMPORTED_SETTINGS = 'settings.yaml.imported';
+
+/** The live settings file, still readable until the upgrade moves it. */
+const LIVE_SETTINGS = 'settings.yaml';
+
+/**
+ * A top-level `context-zip:` key in a settings file.
+ *
+ * A lexical scan, not a parse: the plugin has no YAML parser on purpose (it must
+ * load on a profile that never installed one) and the question is only whether
+ * the section is still written there. Column zero is what makes it top-level, and
+ * a missing or unreadable file is not a match — never a guess.
+ */
+const SETTINGS_SECTION_RE = /^["']?context-zip["']?[ \t]*:/mu;
+
+/**
+ * Whether a settings file under `home` still carries this plugin's old section.
+ *
+ * `settings.yaml.imported` is the file the 0.1.7 upgrade leaves behind;
+ * `settings.yaml` is checked too for a profile that has not been renamed yet.
+ * READ-ONLY by construction: the only filesystem call here is `readFile`, so a
+ * status read can never write into the harness home.
+ *
+ * @param home - the DSH home directory.
+ * @returns true only when one of the two files has the section.
+ */
+export async function importedSettingsPending(home) {
+  if (typeof home !== 'string' || home.length === 0) return false;
+  for (const name of [IMPORTED_SETTINGS, LIVE_SETTINGS]) {
+    try {
+      const text = await readFile(join(home, name), 'utf8');
+      if (SETTINGS_SECTION_RE.test(text)) return true;
+    } catch {
+      // Absent or unreadable: that file says nothing about a pending migration.
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether the redirect was written after the running process began.
+ *
+ * The same judgment the panel makes in `client/live.ts`, kept server-side so the
+ * `attention` field and the row's own status cannot disagree. Both timestamps
+ * must parse; anything less is not evidence.
+ *
+ * @param copiedAt - the stamp's ISO time.
+ * @param processStartedAt - when this harness process began.
+ * @returns true only with two parseable times and `copiedAt` later.
+ */
+function copiedAfterStart(copiedAt, processStartedAt) {
+  if (typeof copiedAt !== 'string' || copiedAt.length === 0) return false;
+  if (typeof processStartedAt !== 'string' || processStartedAt.length === 0) return false;
+  const copied = Date.parse(copiedAt);
+  const started = Date.parse(processStartedAt);
+  if (Number.isFinite(copied) === false || Number.isFinite(started) === false) return false;
+  return copied > started;
+}
+
+/**
+ * Which problem a `/wire` read should draw attention to, or `null` when the row
+ * is in one of the two healthy shapes (active, or a write in flight).
+ *
+ * The order is the whole function. A stale redirect outranks a pending restart
+ * because it is the one the reconnect button fixes; a foreign occupant answers
+ * `null` because there is nothing here this plugin may repair; and `restart`
+ * needs positive evidence, exactly like the panel's own `wireStatusFrom`.
+ *
+ * @param status - the `GET` read's status fields.
+ * @param processStartedAt - when this harness process began.
+ * @returns one kind, or `null`.
+ */
+export function attentionKind(status, processStartedAt) {
+  const wired = status?.wired === true;
+  if (wired && status?.stale === true) return 'update';
+  if (wired !== true) {
+    if (status?.foreign === true) return null;
+    return status?.partial === true ? 'incomplete' : 'inactive';
+  }
+  if (copiedAfterStart(status?.copiedAt, processStartedAt)) return 'restart';
+  return null;
+}
+
+/**
+ * The `attention` field the `/wire` route answers with, or `null`.
+ *
+ * `null` is the healthy answer the client reads as "draw no question mark", so
+ * every branch that cannot be established honestly returns it: an unnameable home
+ * or profile (the prompt's own template needs both real values), and a healthy
+ * status. `migrate` outranks `inactive` and is the only kind that reads the
+ * filesystem, because a profile whose settings never came across needs its
+ * settings moved before a takeover would mean anything.
+ *
+ * @param options - the status, the process start, the profile directory, whether
+ *   this plugin's own row carries any user value, and an optional forced kind for
+ *   the two states the read itself cannot see (`unknown`, `failed`).
+ * @returns `{ kind, home, profile }`, or `null`.
+ */
+export async function readAttention(options) {
+  const { status, processStartedAt, profileDir, rowConfigured, kind: forced } = options ?? {};
+  let home;
+  try {
+    home = dshHomePath();
+  } catch {
+    return null;
+  }
+  if (typeof home !== 'string' || home.length === 0) return null;
+  const profile = typeof profileDir === 'string' && profileDir.length > 0 ? basename(profileDir) : '';
+  if (profile.length === 0) return null;
+  const kind = typeof forced === 'string' && forced.length > 0 ? forced : attentionKind(status, processStartedAt);
+  if (kind === null) return null;
+  if (kind === 'inactive' && rowConfigured === false) {
+    let pending = false;
+    try {
+      pending = await importedSettingsPending(home);
+    } catch {
+      // An unreadable home answers `inactive`, the status the row already shows.
+      pending = false;
+    }
+    if (pending) return { kind: 'migrate', home, profile };
+  }
+  return { kind, home, profile };
+}
+
+export default {
+  resolveProfileDirectory,
+  readWireStatus,
+  wireCompactionRow,
+  basePackageDir,
+  attentionKind,
+  importedSettingsPending,
+  readAttention,
+  REDIRECT_PACKAGE,
+};

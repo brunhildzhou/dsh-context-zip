@@ -1,6 +1,6 @@
 {
   "name": "dsh-context-zip",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Context compaction that keeps its receipts: a five-section handoff summary, a durable segment index, review tools that read compacted text back, optional working notes, and a read-only extraction exit. Mounts as the compaction-basic row's replacement; changes no harness code.",
   "type": "module",
   "main": "lib/index.js",

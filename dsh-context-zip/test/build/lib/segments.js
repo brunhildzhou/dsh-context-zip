@@ -2506,6 +2506,15 @@ function titlesNow(state, options, keys) {
     return {};
   }
 }
+async function attentionNow(options, input) {
+  if (typeof options?.readAttention !== "function") return null;
+  try {
+    const attention = await options.readAttention(input);
+    return attention !== null && typeof attention === "object" ? attention : null;
+  } catch {
+    return null;
+  }
+}
 function registerRoutes(ctx, options) {
   const webServer = ctx.get("webServer");
   if (webServer === void 0) return [];
@@ -2565,9 +2574,18 @@ function registerRoutes(ctx, options) {
         if (req.method === "GET") {
           try {
             const status = await options.readWireStatus();
-            return respond(res, 200, { ok: true, ...status, processStartedAt: processStartedAtNow() });
+            const processStartedAt = processStartedAtNow();
+            const attention = await attentionNow(options, { status, processStartedAt });
+            return respond(res, 200, { ok: true, ...status, processStartedAt, attention });
           } catch (error) {
-            return respond(res, 500, { ok: false, error: String(error?.message ?? error) });
+            const processStartedAt = processStartedAtNow();
+            const attention = await attentionNow(options, { kind: "unknown" });
+            return respond(res, 500, {
+              ok: false,
+              error: String(error?.message ?? error),
+              processStartedAt,
+              attention
+            });
           }
         }
         if (req.method !== "POST") return respond(res, 405, { ok: false, error: "method-not-allowed" });
@@ -2576,9 +2594,18 @@ function registerRoutes(ctx, options) {
         }
         try {
           const result = await options.wireRow();
-          return respond(res, 200, { ok: true, ...result, processStartedAt: processStartedAtNow() });
+          const processStartedAt = processStartedAtNow();
+          const attention = await attentionNow(options, { status: result, processStartedAt });
+          return respond(res, 200, { ok: true, ...result, processStartedAt, attention });
         } catch (error) {
-          return respond(res, 500, { ok: false, error: String(error?.message ?? error), processStartedAt: processStartedAtNow() });
+          const processStartedAt = processStartedAtNow();
+          const attention = await attentionNow(options, { kind: "failed" });
+          return respond(res, 500, {
+            ok: false,
+            error: String(error?.message ?? error),
+            processStartedAt,
+            attention
+          });
         }
       }
     }),
@@ -3059,9 +3086,31 @@ async function readStamp(redirectDir) {
     return null;
   }
 }
+async function hostLookupBases() {
+  const entry = process.argv?.[1];
+  if (typeof entry !== "string" || entry.length === 0) return [];
+  let started;
+  try {
+    started = await realpath(entry);
+  } catch {
+    started = resolve(entry);
+  }
+  const bases = [];
+  for (let dir = dirname2(started); ; dir = dirname2(dir)) {
+    bases.push(join3(dir, "node_modules"));
+    bases.push(join3(dir, "node_modules", ".pnpm", "node_modules"));
+    const parent = dirname2(dir);
+    if (parent === dir) break;
+  }
+  return bases;
+}
 async function basePackageDir(profileDir) {
   const require2 = createRequire(join3(profileDir, "package.json"));
-  for (const base of require2.resolve.paths(REDIRECT_PACKAGE) ?? []) {
+  const bases = [...require2.resolve.paths(REDIRECT_PACKAGE) ?? []];
+  for (const base of await hostLookupBases()) {
+    if (!bases.includes(base)) bases.push(base);
+  }
+  for (const base of bases) {
     const candidate = join3(base, REDIRECT_PACKAGE);
     let manifest;
     try {
@@ -3152,6 +3201,62 @@ async function wireCompactionRow(options) {
   await writeFile3(join3(redirectDir, STAMP_FILE), JSON.stringify(stamp, void 0, 2) + "\n");
   return { wired: true, version, copiedAt: stamp.copiedAt, source: baseDir };
 }
+var IMPORTED_SETTINGS = "settings.yaml.imported";
+var LIVE_SETTINGS = "settings.yaml";
+var SETTINGS_SECTION_RE = /^["']?context-zip["']?[ \t]*:/mu;
+async function importedSettingsPending(home) {
+  if (typeof home !== "string" || home.length === 0) return false;
+  for (const name of [IMPORTED_SETTINGS, LIVE_SETTINGS]) {
+    try {
+      const text = await readFile2(join3(home, name), "utf8");
+      if (SETTINGS_SECTION_RE.test(text)) return true;
+    } catch {
+    }
+  }
+  return false;
+}
+function copiedAfterStart(copiedAt, processStartedAt) {
+  if (typeof copiedAt !== "string" || copiedAt.length === 0) return false;
+  if (typeof processStartedAt !== "string" || processStartedAt.length === 0) return false;
+  const copied = Date.parse(copiedAt);
+  const started = Date.parse(processStartedAt);
+  if (Number.isFinite(copied) === false || Number.isFinite(started) === false) return false;
+  return copied > started;
+}
+function attentionKind(status, processStartedAt) {
+  const wired = status?.wired === true;
+  if (wired && status?.stale === true) return "update";
+  if (wired !== true) {
+    if (status?.foreign === true) return null;
+    return status?.partial === true ? "incomplete" : "inactive";
+  }
+  if (copiedAfterStart(status?.copiedAt, processStartedAt)) return "restart";
+  return null;
+}
+async function readAttention(options) {
+  const { status, processStartedAt, profileDir, rowConfigured, kind: forced } = options ?? {};
+  let home;
+  try {
+    home = dshHomePath2();
+  } catch {
+    return null;
+  }
+  if (typeof home !== "string" || home.length === 0) return null;
+  const profile = typeof profileDir === "string" && profileDir.length > 0 ? basename(profileDir) : "";
+  if (profile.length === 0) return null;
+  const kind = typeof forced === "string" && forced.length > 0 ? forced : attentionKind(status, processStartedAt);
+  if (kind === null) return null;
+  if (kind === "inactive" && rowConfigured === false) {
+    let pending = false;
+    try {
+      pending = await importedSettingsPending(home);
+    } catch {
+      pending = false;
+    }
+    if (pending) return { kind: "migrate", home, profile };
+  }
+  return { kind, home, profile };
+}
 
 // src/panel-copy.ts
 var FALLBACK_ENABLED_COPY = {
@@ -3221,7 +3326,11 @@ var settingsState = {
   /** Agent/preset keys the stored user section names for retrieval. */
   userRetrievalAgents: /* @__PURE__ */ new Set(),
   /** Agent/preset keys the stored user section names. */
-  userAgents: /* @__PURE__ */ new Set()
+  userAgents: /* @__PURE__ */ new Set(),
+  /** Whether the stored user section names anything at all. */
+  rowConfigured: false,
+  /** Whether the plugin's own row is the settings store (the 0.1.7 shape). */
+  settingsInRow: CONFIG_IS_LIVE
 };
 function applySettingsPatch(current, patch) {
   const source = patch !== null && typeof patch === "object" && !Array.isArray(patch) ? patch : {};
@@ -3511,6 +3620,50 @@ function wireFace(status) {
   if (status === "failed") return "error";
   return "off";
 }
+var ATTENTION_STATE_KEYS = {
+  inactive: "inactiveMain",
+  update: "updateMain",
+  migrate: "migrateMain",
+  restart: "restartMain",
+  incomplete: "incompleteMain",
+  failed: "failMain",
+  unknown: "unknownMain"
+};
+function attentionOf(attention) {
+  if (attention === null || typeof attention !== "object" || Array.isArray(attention)) return null;
+  const kind = typeof attention.kind === "string" ? attention.kind : "";
+  if (kind.length === 0) return null;
+  return {
+    kind,
+    home: typeof attention.home === "string" ? attention.home : "",
+    profile: typeof attention.profile === "string" ? attention.profile : ""
+  };
+}
+function fillTemplate(text, values) {
+  let filled = text;
+  for (const [name, value] of Object.entries(values)) filled = filled.split(`{${name}}`).join(value);
+  return filled;
+}
+function attentionPrompt(attention, strings, port = "") {
+  const clean = attentionOf(attention);
+  if (clean === null) return null;
+  const stateKey = ATTENTION_STATE_KEYS[clean.kind];
+  if (stateKey === void 0) return null;
+  const state = typeof strings?.[stateKey] === "string" ? strings[stateKey] : "";
+  const values = { home: clean.home, profile: clean.profile, port: String(port ?? ""), state };
+  const templates = {
+    inactive: strings?.promptInactive,
+    update: strings?.promptUpdate,
+    migrate: strings?.promptMigrate,
+    incomplete: strings?.promptRepair,
+    failed: strings?.promptRepair,
+    unknown: strings?.promptRepair
+  };
+  const template = templates[clean.kind];
+  const body = typeof template === "string" && template.length > 0 ? fillTemplate(template, values) : "";
+  const note = clean.kind === "restart" && typeof strings?.helpTopRestart === "string" ? strings.helpTopRestart : "";
+  return { kind: clean.kind, state, body, note, copyText: body.length > 0 ? body : null };
+}
 function stampText(iso) {
   if (typeof iso !== "string" || iso.length === 0) return "";
   const ms = Date.parse(iso);
@@ -3589,6 +3742,9 @@ export {
   addedClaims,
   applySettingsPatch,
   assertPathInsideProfile,
+  attentionKind,
+  attentionOf,
+  attentionPrompt,
   attributeSummarySections,
   auditUnsupportedClaims,
   basePackageDir,
@@ -3615,6 +3771,7 @@ export {
   historyFindTool,
   historyReadTool,
   historySearchTool,
+  importedSettingsPending,
   initialLiveHealth,
   introducedPaths,
   isRangeTooSmallFailure2 as isRangeTooSmallFailure,
@@ -3637,6 +3794,7 @@ export {
   pathTokensIn,
   planManualCompaction,
   probeModel,
+  readAttention,
   readFailureCount,
   readModelCatalog,
   readSessionEvents,

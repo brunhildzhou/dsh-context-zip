@@ -352,6 +352,48 @@ export declare function wireText(status: any, payload: any, strings: any, locale
  */
 export declare function wireFace(status: any): "busy" | "on" | "error" | "off";
 /**
+ * Clean one `/wire` payload's `attention` field into a usable object, or `null`.
+ *
+ * Anything that is not an object with a non-empty `kind` is `null`: an older
+ * server that does not send the field, a failed read that never reached the
+ * server, and a malformed answer all have to mean "draw no question mark", which
+ * is exactly what a missing field means. `home` and `profile` are read as strings
+ * because the prompt template interpolates them; a value of the wrong type would
+ * print `undefined` into a command.
+ *
+ * @param attention - the `attention` value from a `/wire` payload.
+ * @returns `{ kind, home, profile }`, or `null`.
+ */
+export declare function attentionOf(attention: any): {
+    kind: any;
+    home: any;
+    profile: any;
+};
+/**
+ * What the fourth question mark's bubble shows, for one attention kind.
+ *
+ * The bubble is "one line of current state + the repair prompt + a copy button",
+ * and the copy button copies the PROMPT BODY alone: the state line is context for
+ * the reader, not part of what an agent should receive. `restart` is the one kind
+ * with no prompt: only the user may restart the host, so there is nothing an agent
+ * could be asked to do and no button to press. `{home}`, `{profile}` and `{port}`
+ * come from the server's `attention` and the page's own location, so the text the
+ * user copies holds real paths rather than placeholders.
+ *
+ * @param attention - the `/wire` payload's `attention` value.
+ * @param strings - the active locale's string table.
+ * @param port - the page's port, as a string.
+ * @returns `{ kind, state, body, note, copyText }`, or `null` when there is
+ *   nothing to draw.
+ */
+export declare function attentionPrompt(attention: any, strings: any, port?: string): {
+    kind: any;
+    state: string;
+    body: any;
+    note: any;
+    copyText: any;
+};
+/**
  * One `MM-DD HH:mm` local rendering of a stamp's ISO time.
  *
  * `clockText` alone would print a time of day with no date, and the stamp is a

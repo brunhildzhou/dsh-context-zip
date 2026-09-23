@@ -69,6 +69,14 @@ export declare function resolveProfileDirectory(baseUrl: any, pluginDir: any): P
  * version carries the redirect marker is skipped for the same reason, which is
  * what makes it safe to resolve the backend while a redirect is already in place.
  *
+ * The profile's own lookup paths are tried FIRST, because on a healthy profile
+ * the backend the `compaction-basic` row would load is the one beside the plugin,
+ * and the checks below are about that copy. When none of them answers (a dangling
+ * link after an upgrade is not a readable manifest) the harness's own lookup
+ * paths are tried, so the shipped version stays knowable on 0.1.7. Both halves
+ * read a manifest and reject the redirect marker; a run that finds neither still
+ * throws rather than inventing a version.
+ *
  * @param profileDir - the profile directory.
  * @returns the absolute package directory.
  */
@@ -129,11 +137,60 @@ export declare function wireCompactionRow(options: any): Promise<{
     copiedAt: string;
     source: string;
 }>;
+/**
+ * Whether a settings file under `home` still carries this plugin's old section.
+ *
+ * `settings.yaml.imported` is the file the 0.1.7 upgrade leaves behind;
+ * `settings.yaml` is checked too for a profile that has not been renamed yet.
+ * READ-ONLY by construction: the only filesystem call here is `readFile`, so a
+ * status read can never write into the harness home.
+ *
+ * @param home - the DSH home directory.
+ * @returns true only when one of the two files has the section.
+ */
+export declare function importedSettingsPending(home: any): Promise<boolean>;
+/**
+ * Which problem a `/wire` read should draw attention to, or `null` when the row
+ * is in one of the two healthy shapes (active, or a write in flight).
+ *
+ * The order is the whole function. A stale redirect outranks a pending restart
+ * because it is the one the reconnect button fixes; a foreign occupant answers
+ * `null` because there is nothing here this plugin may repair; and `restart`
+ * needs positive evidence, exactly like the panel's own `wireStatusFrom`.
+ *
+ * @param status - the `GET` read's status fields.
+ * @param processStartedAt - when this harness process began.
+ * @returns one kind, or `null`.
+ */
+export declare function attentionKind(status: any, processStartedAt: any): "update" | "incomplete" | "inactive" | "restart";
+/**
+ * The `attention` field the `/wire` route answers with, or `null`.
+ *
+ * `null` is the healthy answer the client reads as "draw no question mark", so
+ * every branch that cannot be established honestly returns it: an unnameable home
+ * or profile (the prompt's own template needs both real values), and a healthy
+ * status. `migrate` outranks `inactive` and is the only kind that reads the
+ * filesystem, because a profile whose settings never came across needs its
+ * settings moved before a takeover would mean anything.
+ *
+ * @param options - the status, the process start, the profile directory, whether
+ *   this plugin's own row carries any user value, and an optional forced kind for
+ *   the two states the read itself cannot see (`unknown`, `failed`).
+ * @returns `{ kind, home, profile }`, or `null`.
+ */
+export declare function readAttention(options: any): Promise<{
+    kind: string;
+    home: string;
+    profile: string;
+}>;
 declare const _default: {
     resolveProfileDirectory: typeof resolveProfileDirectory;
     readWireStatus: typeof readWireStatus;
     wireCompactionRow: typeof wireCompactionRow;
     basePackageDir: typeof basePackageDir;
+    attentionKind: typeof attentionKind;
+    importedSettingsPending: typeof importedSettingsPending;
+    readAttention: typeof readAttention;
     REDIRECT_PACKAGE: string;
 };
 export default _default;

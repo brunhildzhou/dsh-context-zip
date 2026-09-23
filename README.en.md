@@ -5,7 +5,7 @@
 [![license](https://img.shields.io/github/license/brunhildzhou/dsh-context-zip)](./LICENSE)
 [![stars](https://img.shields.io/github/stars/brunhildzhou/dsh-context-zip)](https://github.com/brunhildzhou/dsh-context-zip)
 
-**A context-compaction plugin for the DeepSeek Harness (DSH): it takes over the harness's built-in compaction summarizer, writes a fixed five-section handoff summary instead, and keeps every compacted span readable in a segment index.** Version `0.1.4`, MIT licensed. See [dsh-context-zip on npm](https://www.npmjs.com/package/dsh-context-zip). [中文](./README.md)
+**A context-compaction plugin for the DeepSeek Harness (DSH): it takes over the harness's built-in compaction summarizer, writes a fixed five-section handoff summary instead, and keeps every compacted span readable in a segment index.** Version `0.1.5`, MIT licensed. See [dsh-context-zip on npm](https://www.npmjs.com/package/dsh-context-zip). [中文](./README.md)
 
 ## At a glance
 

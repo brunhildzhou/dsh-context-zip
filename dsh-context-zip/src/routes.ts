@@ -104,11 +104,34 @@ function titlesNow(state, options, keys) {
 }
 
 /**
+ * The `attention` field for one `/wire` answer, or `null`.
+ *
+ * Optional on purpose: a composition that supplied only the status read still
+ * gets the same payload shape, with `null` meaning "nothing to draw attention
+ * to". A failure inside the read is swallowed the same way, so the question mark
+ * can never take the wire route down with it.
+ *
+ * @param options - the route options, which may carry `readAttention`.
+ * @param input - the status fields, the process start, and the forced kind for a
+ *   read failure (`unknown`) or a refused write (`failed`).
+ * @returns the attention object, or `null`.
+ */
+async function attentionNow(options, input) {
+  if (typeof options?.readAttention !== 'function') return null;
+  try {
+    const attention = await options.readAttention(input);
+    return attention !== null && typeof attention === 'object' ? attention : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Register the browser-facing routes.
  *
  * @param ctx - plugin context carrying `webServer`.
  * @param options - the settings scope, the segment reader, the mode reader, the
- *   title memo factory, and the two wire callbacks.
+ *   title memo factory, the two wire callbacks, and the optional attention read.
  * @returns the disposers, or [] when no web server is composed.
  */
 export function registerRoutes(ctx, options) {
@@ -200,11 +223,24 @@ export function registerRoutes(ctx, options) {
             const status = await options.readWireStatus();
             // The start time rides on the read: the panel judges "restart required"
             // from the pair (copiedAt, processStartedAt), not from `effective`.
-            return respond(res, 200, { ok: true, ...status, processStartedAt: processStartedAtNow() });
+            const processStartedAt = processStartedAtNow();
+            // `attention` is a classification of the very fields above, so it is
+            // computed from the same read and carries the home and profile the
+            // panel's prompt template needs. `null` is the healthy answer and the
+            // only value that draws no question mark.
+            const attention = await attentionNow(options, { status, processStartedAt });
+            return respond(res, 200, { ok: true, ...status, processStartedAt, attention });
           } catch (error) {
             // A status read that cannot name the profile is answered as a failure:
             // the panel says "cannot read" instead of drawing a wrong "unwired".
-            return respond(res, 500, { ok: false, error: String(error?.message ?? error) });
+            const processStartedAt = processStartedAtNow();
+            const attention = await attentionNow(options, { kind: 'unknown' });
+            return respond(res, 500, {
+              ok: false,
+              error: String(error?.message ?? error),
+              processStartedAt,
+              attention,
+            });
           }
         }
         if (req.method !== 'POST') return respond(res, 405, { ok: false, error: 'method-not-allowed' });
@@ -218,14 +254,25 @@ export function registerRoutes(ctx, options) {
           // answer has to carry the other side of the comparison: without it the
           // panel's optimistic verdict is "already in effect" until the next GET,
           // and the user who just pressed the button is told the wrong thing.
-          return respond(res, 200, { ok: true, ...result, processStartedAt: processStartedAtNow() });
+          const processStartedAt = processStartedAtNow();
+          // The kind is re-classified from what was just written, so a successful
+          // takeover reports `restart` and the question mark changes with the row.
+          const attention = await attentionNow(options, { status: result, processStartedAt });
+          return respond(res, 200, { ok: true, ...result, processStartedAt, attention });
         } catch (error) {
           // Every refusal and every write failure travels as its own message: the
           // panel's job is to show the reason, and a generic "failed" would hide
           // the difference between "occupied by a real package" and "disk error".
           // The start time rides along so both answers of this route are computed
           // the same way; the failed branch reads only `error`.
-          return respond(res, 500, { ok: false, error: String(error?.message ?? error), processStartedAt: processStartedAtNow() });
+          const processStartedAt = processStartedAtNow();
+          const attention = await attentionNow(options, { kind: 'failed' });
+          return respond(res, 500, {
+            ok: false,
+            error: String(error?.message ?? error),
+            processStartedAt,
+            attention,
+          });
         }
       },
     }),

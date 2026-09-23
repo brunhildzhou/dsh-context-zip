@@ -37,7 +37,7 @@ export declare const ROUTE_PREFIX = "/dsh-context-zip";
  *
  * @param ctx - plugin context carrying `webServer`.
  * @param options - the settings scope, the segment reader, the mode reader, the
- *   title memo factory, and the two wire callbacks.
+ *   title memo factory, the two wire callbacks, and the optional attention read.
  * @returns the disposers, or [] when no web server is composed.
  */
 export declare function registerRoutes(ctx: any, options: any): any[];

@@ -50,7 +50,7 @@ import {
 import { latestContextWindow, loadSegments, readSessionEvents } from './segments.ts';
 import { registerRoutes } from './routes.ts';
 import { createTitleMemo, sessionTitlesFor } from './session-titles.ts';
-import { readWireStatus, wireCompactionRow } from './wire.ts';
+import { readAttention, readWireStatus, resolveProfileDirectory, wireCompactionRow } from './wire.ts';
 
 // The panel's title read used to live in this module; it moved to
 // `./session-titles.ts` so the memo and the fold share one home. Re-exported
@@ -343,6 +343,26 @@ const settingsState: {
   userRetrieval: boolean;
   /** Agent/preset keys the stored user section names for retrieval. */
   userRetrievalAgents: Set<string>;
+  /**
+   * Whether this plugin's own row carries ANY user value.
+   *
+   * The schema resolves a default for every field, so the resolved value cannot
+   * answer this; the settings descriptor's user layer can. It is what tells a
+   * row nobody ever configured from one whose settings are in place, which is the
+   * distinction the `migrate` attention kind needs. `false` on a provider that
+   * never reports a user layer, and only an explicit `false` lets that kind fire.
+   */
+  rowConfigured: boolean;
+  /**
+   * Whether this process stores plugin settings in the plugin's own profile row.
+   *
+   * That is the 0.1.7 shape, and it is the only shape in which `migrate` can mean
+   * anything: on 0.1.5/0.1.6 the standalone `settings.yaml` IS the store, so a
+   * `context-zip:` section there is the normal state, not a migration that was
+   * missed. Kept apart from {@link rowConfigured} so the pair can answer "the row
+   * is the store and it is empty" instead of either half on its own.
+   */
+  settingsInRow: boolean;
 } = {
   /** Resolved value, or null when no settings provider is composed. */
   value: null,
@@ -356,6 +376,10 @@ const settingsState: {
   userRetrievalAgents: new Set(),
   /** Agent/preset keys the stored user section names. */
   userAgents: new Set(),
+  /** Whether the stored user section names anything at all. */
+  rowConfigured: false,
+  /** Whether the plugin's own row is the settings store (the 0.1.7 shape). */
+  settingsInRow: CONFIG_IS_LIVE,
 };
 
 /**
@@ -671,6 +695,9 @@ export async function apply(ctx, config) {
     // version number: `register` is the whole of the older line's API surface and
     // is gone in 0.1.7-alpha.1.
     const usesForms = typeof settings.register !== 'function';
+    // The row IS the store only on the newer line; the attention read asks this
+    // before it will name a missed migration.
+    settingsState.settingsInRow = usesForms;
     if (!usesForms) {
       // 0.1.5/0.1.6, unchanged: the plugin registers a namespace of its own.
       scope = settings.register(SETTINGS_NS, ContextZipSettings, {
@@ -1047,6 +1074,25 @@ export async function apply(ctx, config) {
       // route only decides which verb is allowed and how a failure is reported.
       readWireStatus: () => readWireStatus({ baseUrl: profileBaseUrl, pluginDir }),
       wireRow: () => wireCompactionRow({ baseUrl: profileBaseUrl, pluginDir }),
+      // The `attention` field of the same route: the panel's question mark renders
+      // only when this answers non-null. The profile is resolved here, through the
+      // same function the status read uses, so the prompt's `{profile}` is the real
+      // one; when it cannot be named the read answers `null` rather than filling a
+      // template with a guess. `rowConfigured` is gated on the row being the store,
+      // so a 0.1.5 profile with values in `settings.yaml` is never called unmigrated.
+      readAttention: async (input) => {
+        let profileDir = '';
+        try {
+          profileDir = await resolveProfileDirectory(profileBaseUrl, pluginDir);
+        } catch {
+          // Unnameable profile: `readAttention` answers null on an empty name.
+        }
+        return readAttention({
+          ...input,
+          profileDir,
+          rowConfigured: settingsState.settingsInRow ? settingsState.rowConfigured : undefined,
+        });
+      },
       // 面板的模型下拉框读这个。从活的注册表现读，所以 adapter 增删路由之后刷新
       // 面板就能看到，不需要重启，也不需要在插件里维护第二份清单。
       listModels: () => readModelCatalog(ctx.llm),
@@ -1476,6 +1522,7 @@ function refreshSettings(scope, settings, ns, report) {
     settingsState.revision = typeof descriptor?.revision === 'number' ? descriptor.revision : undefined;
     const user = descriptor?.user;
     const section = user !== null && typeof user === 'object' ? user : null;
+    settingsState.rowConfigured = section !== null && Object.keys(section).length > 0;
     settingsState.userEnabled = section !== null && Object.hasOwn(section, 'enabled');
     const agents = section !== null && section.agents !== null && typeof section.agents === 'object' ? section.agents : null;
     settingsState.userAgents = new Set(agents === null ? [] : Object.keys(agents));
@@ -1487,6 +1534,7 @@ function refreshSettings(scope, settings, ns, report) {
     settingsState.userRetrievalAgents = new Set(retrievalAgents === null ? [] : Object.keys(retrievalAgents));
   } catch {
     settingsState.revision = undefined;
+    settingsState.rowConfigured = false;
     settingsState.userEnabled = false;
     settingsState.userAgents = new Set();
     settingsState.userRetrieval = false;

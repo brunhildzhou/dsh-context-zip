@@ -1071,6 +1071,15 @@ function titlesNow(state, options, keys) {
     return {};
   }
 }
+async function attentionNow(options, input) {
+  if (typeof options?.readAttention !== "function") return null;
+  try {
+    const attention = await options.readAttention(input);
+    return attention !== null && typeof attention === "object" ? attention : null;
+  } catch {
+    return null;
+  }
+}
 function registerRoutes(ctx, options) {
   const webServer = ctx.get("webServer");
   if (webServer === void 0) return [];
@@ -1130,9 +1139,18 @@ function registerRoutes(ctx, options) {
         if (req.method === "GET") {
           try {
             const status = await options.readWireStatus();
-            return respond(res, 200, { ok: true, ...status, processStartedAt: processStartedAtNow() });
+            const processStartedAt = processStartedAtNow();
+            const attention = await attentionNow(options, { status, processStartedAt });
+            return respond(res, 200, { ok: true, ...status, processStartedAt, attention });
           } catch (error) {
-            return respond(res, 500, { ok: false, error: String(error?.message ?? error) });
+            const processStartedAt = processStartedAtNow();
+            const attention = await attentionNow(options, { kind: "unknown" });
+            return respond(res, 500, {
+              ok: false,
+              error: String(error?.message ?? error),
+              processStartedAt,
+              attention
+            });
           }
         }
         if (req.method !== "POST") return respond(res, 405, { ok: false, error: "method-not-allowed" });
@@ -1141,9 +1159,18 @@ function registerRoutes(ctx, options) {
         }
         try {
           const result = await options.wireRow();
-          return respond(res, 200, { ok: true, ...result, processStartedAt: processStartedAtNow() });
+          const processStartedAt = processStartedAtNow();
+          const attention = await attentionNow(options, { status: result, processStartedAt });
+          return respond(res, 200, { ok: true, ...result, processStartedAt, attention });
         } catch (error) {
-          return respond(res, 500, { ok: false, error: String(error?.message ?? error), processStartedAt: processStartedAtNow() });
+          const processStartedAt = processStartedAtNow();
+          const attention = await attentionNow(options, { kind: "failed" });
+          return respond(res, 500, {
+            ok: false,
+            error: String(error?.message ?? error),
+            processStartedAt,
+            attention
+          });
         }
       }
     }),
@@ -1624,9 +1651,31 @@ async function readStamp(redirectDir) {
     return null;
   }
 }
+async function hostLookupBases() {
+  const entry = process.argv?.[1];
+  if (typeof entry !== "string" || entry.length === 0) return [];
+  let started;
+  try {
+    started = await realpath(entry);
+  } catch {
+    started = resolve(entry);
+  }
+  const bases = [];
+  for (let dir = dirname2(started); ; dir = dirname2(dir)) {
+    bases.push(join3(dir, "node_modules"));
+    bases.push(join3(dir, "node_modules", ".pnpm", "node_modules"));
+    const parent = dirname2(dir);
+    if (parent === dir) break;
+  }
+  return bases;
+}
 async function basePackageDir(profileDir) {
   const require2 = createRequire(join3(profileDir, "package.json"));
-  for (const base of require2.resolve.paths(REDIRECT_PACKAGE) ?? []) {
+  const bases = [...require2.resolve.paths(REDIRECT_PACKAGE) ?? []];
+  for (const base of await hostLookupBases()) {
+    if (!bases.includes(base)) bases.push(base);
+  }
+  for (const base of bases) {
     const candidate = join3(base, REDIRECT_PACKAGE);
     let manifest;
     try {
@@ -1716,6 +1765,62 @@ async function wireCompactionRow(options) {
   await writeFile3(join3(redirectDir, "base.js"), baseSource);
   await writeFile3(join3(redirectDir, STAMP_FILE), JSON.stringify(stamp, void 0, 2) + "\n");
   return { wired: true, version, copiedAt: stamp.copiedAt, source: baseDir };
+}
+var IMPORTED_SETTINGS = "settings.yaml.imported";
+var LIVE_SETTINGS = "settings.yaml";
+var SETTINGS_SECTION_RE = /^["']?context-zip["']?[ \t]*:/mu;
+async function importedSettingsPending(home) {
+  if (typeof home !== "string" || home.length === 0) return false;
+  for (const name2 of [IMPORTED_SETTINGS, LIVE_SETTINGS]) {
+    try {
+      const text = await readFile2(join3(home, name2), "utf8");
+      if (SETTINGS_SECTION_RE.test(text)) return true;
+    } catch {
+    }
+  }
+  return false;
+}
+function copiedAfterStart(copiedAt, processStartedAt) {
+  if (typeof copiedAt !== "string" || copiedAt.length === 0) return false;
+  if (typeof processStartedAt !== "string" || processStartedAt.length === 0) return false;
+  const copied = Date.parse(copiedAt);
+  const started = Date.parse(processStartedAt);
+  if (Number.isFinite(copied) === false || Number.isFinite(started) === false) return false;
+  return copied > started;
+}
+function attentionKind(status, processStartedAt) {
+  const wired = status?.wired === true;
+  if (wired && status?.stale === true) return "update";
+  if (wired !== true) {
+    if (status?.foreign === true) return null;
+    return status?.partial === true ? "incomplete" : "inactive";
+  }
+  if (copiedAfterStart(status?.copiedAt, processStartedAt)) return "restart";
+  return null;
+}
+async function readAttention(options) {
+  const { status, processStartedAt, profileDir, rowConfigured, kind: forced } = options ?? {};
+  let home;
+  try {
+    home = dshHomePath2();
+  } catch {
+    return null;
+  }
+  if (typeof home !== "string" || home.length === 0) return null;
+  const profile = typeof profileDir === "string" && profileDir.length > 0 ? basename(profileDir) : "";
+  if (profile.length === 0) return null;
+  const kind = typeof forced === "string" && forced.length > 0 ? forced : attentionKind(status, processStartedAt);
+  if (kind === null) return null;
+  if (kind === "inactive" && rowConfigured === false) {
+    let pending = false;
+    try {
+      pending = await importedSettingsPending(home);
+    } catch {
+      pending = false;
+    }
+    if (pending) return { kind: "migrate", home, profile };
+  }
+  return { kind, home, profile };
 }
 
 // src/panel-copy.ts
@@ -2800,7 +2905,11 @@ var settingsState = {
   /** Agent/preset keys the stored user section names for retrieval. */
   userRetrievalAgents: /* @__PURE__ */ new Set(),
   /** Agent/preset keys the stored user section names. */
-  userAgents: /* @__PURE__ */ new Set()
+  userAgents: /* @__PURE__ */ new Set(),
+  /** Whether the stored user section names anything at all. */
+  rowConfigured: false,
+  /** Whether the plugin's own row is the settings store (the 0.1.7 shape). */
+  settingsInRow: CONFIG_IS_LIVE
 };
 function applySettingsPatch(current, patch) {
   const source = patch !== null && typeof patch === "object" && !Array.isArray(patch) ? patch : {};
@@ -2930,6 +3039,7 @@ async function apply(ctx, config) {
     const settings = scoped.settings;
     const reportSwitch = (message) => ctx.logger?.info?.(`[context-zip] ${message}`);
     const usesForms = typeof settings.register !== "function";
+    settingsState.settingsInRow = usesForms;
     if (!usesForms) {
       scope = settings.register(SETTINGS_NS, ContextZipSettings, {
         base: { enabled: DEFAULT_ENABLED, agents: {} },
@@ -3198,6 +3308,24 @@ async function apply(ctx, config) {
       // route only decides which verb is allowed and how a failure is reported.
       readWireStatus: () => readWireStatus({ baseUrl: profileBaseUrl, pluginDir }),
       wireRow: () => wireCompactionRow({ baseUrl: profileBaseUrl, pluginDir }),
+      // The `attention` field of the same route: the panel's question mark renders
+      // only when this answers non-null. The profile is resolved here, through the
+      // same function the status read uses, so the prompt's `{profile}` is the real
+      // one; when it cannot be named the read answers `null` rather than filling a
+      // template with a guess. `rowConfigured` is gated on the row being the store,
+      // so a 0.1.5 profile with values in `settings.yaml` is never called unmigrated.
+      readAttention: async (input) => {
+        let profileDir = "";
+        try {
+          profileDir = await resolveProfileDirectory(profileBaseUrl, pluginDir);
+        } catch {
+        }
+        return readAttention({
+          ...input,
+          profileDir,
+          rowConfigured: settingsState.settingsInRow ? settingsState.rowConfigured : void 0
+        });
+      },
       // 面板的模型下拉框读这个。从活的注册表现读，所以 adapter 增删路由之后刷新
       // 面板就能看到，不需要重启，也不需要在插件里维护第二份清单。
       listModels: () => readModelCatalog(ctx.llm),
@@ -3435,6 +3563,7 @@ function refreshSettings(scope, settings, ns, report) {
     settingsState.revision = typeof descriptor?.revision === "number" ? descriptor.revision : void 0;
     const user = descriptor?.user;
     const section = user !== null && typeof user === "object" ? user : null;
+    settingsState.rowConfigured = section !== null && Object.keys(section).length > 0;
     settingsState.userEnabled = section !== null && Object.hasOwn(section, "enabled");
     const agents = section !== null && section.agents !== null && typeof section.agents === "object" ? section.agents : null;
     settingsState.userAgents = new Set(agents === null ? [] : Object.keys(agents));
@@ -3443,6 +3572,7 @@ function refreshSettings(scope, settings, ns, report) {
     settingsState.userRetrievalAgents = new Set(retrievalAgents === null ? [] : Object.keys(retrievalAgents));
   } catch {
     settingsState.revision = void 0;
+    settingsState.rowConfigured = false;
     settingsState.userEnabled = false;
     settingsState.userAgents = /* @__PURE__ */ new Set();
     settingsState.userRetrieval = false;
