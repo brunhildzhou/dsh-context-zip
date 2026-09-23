@@ -90,7 +90,7 @@ The four state shots come from a temporary DSH instance on a hidden virtual desk
 
 ## Compatibility and boundaries
 
-- **Host**: DeepSeek Harness, peer range `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0 || >=0.1.7-alpha.1 <0.2.0-0`; tested against `0.1.5-rc.2`, `0.1.6-alpha.2` and `0.1.7-alpha.1`, other 0.1.x versions were not tested one by one.
+- **Host**: DeepSeek Harness, peer range `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0 || >=0.1.7-alpha.1 <0.2.0-0`; tested against `0.1.5-rc.2`, `0.1.6-alpha.2`, `0.1.7-alpha.1` and `0.1.7-rc.1`, other 0.1.x versions were not tested one by one.
 - **Node.js**: `^22.19.0 || >=24.0.0` (`engines` in `dsh-context-zip/package.json`).
 - **Peer dependencies** resolve from the profile's `node_modules` and are not installed with this plugin.
 - **UI languages**: Chinese and English, two string tables with matching key sets.
