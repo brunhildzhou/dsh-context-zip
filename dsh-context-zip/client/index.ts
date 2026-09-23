@@ -226,7 +226,7 @@ const ZH = {
    curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
    它只重写 profile 里那一份重定向（package.json、index.js、base.js 与戳），不碰插件本体，升级仍走 dsh plugin add。
 2. 兜底（只有第 1 步报「本插件的 redirect 文件缺失」才做）：读 {home}/profiles/{profile}/package.json，看 dependencies 里有没有 dsh-context-zip、dsh.profile.bundles 里有没有它；确实缺了才装：dsh plugin --profile {profile} add dsh-context-zip，装完再跑一次第 1 步。
-3. 确认：curl -s http://127.0.0.1:{port}/dsh-context-zip/wire 应看到 wired:true、copiedAt 晚于 processStartedAt（本次进程里状态会变成「等待重启」）；stale 可能仍为 true，那要等重启后重读才翻，不算这次接管失败。
+3. 确认：curl -s http://127.0.0.1:{port}/dsh-context-zip/wire 应看到 wired:true、copiedAt 晚于 processStartedAt（本次进程里状态会变成「等待重启」）；stale 应为 false（每次读取现算，接管写完戳就会翻）；若仍为 true，说明这次接管没落到位，请报给我。
 4. 回报：第 1 步与第 3 步的完整返回。
 5. 不要自行重启 DSH。`,
   promptUpdate: `背景：我的 dsh-context-zip 提示重定向需要更新（它包住的内置压缩后端版本比宿主旧）。请按下面做，全程不需要界面操作。
@@ -234,7 +234,7 @@ const ZH = {
 1. 记现状：curl -s http://127.0.0.1:{port}/dsh-context-zip/wire ，把 version 与 current 报给我。
 2. 刷新重定向：调插件自己的接管路由，把内置后端的一份新拷贝写进 profile 的槽位并更新戳：
    curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
-3. 再 curl 一次第 1 步的地址，确认 wired:true、copiedAt 晚于 processStartedAt（本次进程里状态会变成「等待重启」）；stale 可能仍为 true，那要等重启后重读才翻。
+3. 再 curl 一次第 1 步的地址，确认 wired:true、copiedAt 晚于 processStartedAt（本次进程里状态会变成「等待重启」）；stale 应为 false（每次读取现算，接管写完戳就会翻）；若仍为 true，说明这次接管没落到位，请报给我。
 4. 回报两次返回。不要自行重启 DSH。`,
   promptMigrate: `背景：我的 DSH 从 0.1.5/0.1.6 升到 0.1.7 之后，dsh-context-zip 的设置没跟过来（摘要兜底、摘要重排变关，已生效会话变「无」）。原因是 0.1.7 把 settings.yaml 改名成 settings.yaml.imported，只迁移白名单里的段，插件段被落下。请按下面做，全程不需要界面操作。
 
@@ -251,7 +251,7 @@ const ZH = {
 1. 收集现场：curl -s http://127.0.0.1:{port}/dsh-context-zip/wire ，把完整返回报给我；再找出 harness 启动日志里含 dsh-context-zip 的行并摘出来。
 2. 按顺序试这个修法（做完一步就回报）：调插件自己的接管路由，把内置后端的一份新拷贝写进 profile 的槽位并更新戳：
    curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
-3. 确认：curl -s http://127.0.0.1:{port}/dsh-context-zip/wire 应看到 wired:true、copiedAt 晚于 processStartedAt（本次进程里状态会变成「等待重启」）；stale 可能仍为 true，那要等重启后重读才翻。
+3. 确认：curl -s http://127.0.0.1:{port}/dsh-context-zip/wire 应看到 wired:true、copiedAt 晚于 processStartedAt（本次进程里状态会变成「等待重启」）；stale 应为 false（每次读取现算，接管写完戳就会翻）；若仍为 true，说明这次接管没落到位，请报给我。
 4. 回报每步输出。不要自行重启 DSH。`,
   // ── 已生效会话（只读）
   agentsSection: '已生效会话',
@@ -385,7 +385,7 @@ const EN = {
    curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
    It rewrites only that redirect copy in the profile (package.json, index.js, base.js and the stamp); the plugin itself is left alone, so upgrades still go through dsh plugin add.
 2. Fallback (only if step 1 reports this plugin's redirect files are missing): read {home}/profiles/{profile}/package.json and check that dsh-context-zip is in dependencies and in dsh.profile.bundles; only if it is really missing, install it: dsh plugin --profile {profile} add dsh-context-zip, then run step 1 again.
-3. Check it yourself: curl -s http://127.0.0.1:{port}/dsh-context-zip/wire should show wired:true with copiedAt later than processStartedAt (the row reads "restart required" in this process); stale may still be true, which only a re-read after the restart turns over, so it does not mean this takeover failed.
+3. Check it yourself: curl -s http://127.0.0.1:{port}/dsh-context-zip/wire should show wired:true with copiedAt later than processStartedAt (the row reads "restart required" in this process); stale should be false (it is recomputed on every read, so it turns over as soon as the takeover writes the stamp). If it is still true, the takeover did not land; report that back to me.
 4. Report back: the whole answer of steps 1 and 3.
 5. Do not restart DSH yourself.`,
   promptUpdate: `Background: my dsh-context-zip says the redirect needs an update (the built-in compaction backend it wraps is older than the one the host ships). Please do the following; no UI steps at any point.
@@ -393,7 +393,7 @@ const EN = {
 1. Record the current state: curl -s http://127.0.0.1:{port}/dsh-context-zip/wire and report version and current to me.
 2. Refresh the redirect: call the plugin's own takeover route, which writes a fresh copy of the built-in backend into the profile's slot and updates the stamp:
    curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
-3. curl the address from step 1 again and confirm wired:true with copiedAt later than processStartedAt (the row reads "restart required" in this process); stale may still be true and only turns over on a re-read after the restart.
+3. curl the address from step 1 again and confirm wired:true with copiedAt later than processStartedAt (the row reads "restart required" in this process); stale should be false (it is recomputed on every read, so it turns over as soon as the takeover writes the stamp). If it is still true, the takeover did not land; report that back to me.
 4. Report both answers. Do not restart DSH yourself.`,
   promptMigrate: `Background: after my DSH was upgraded from 0.1.5/0.1.6 to 0.1.7, the dsh-context-zip settings did not come along (the mechanical summary fallback and the summary re-layout turned off, and the sessions in effect became "none"). The cause is that 0.1.7 renamed settings.yaml to settings.yaml.imported and migrates only a whitelist of sections, so the plugin section was left behind. Please do the following; no UI steps at any point.
 
@@ -410,7 +410,7 @@ const EN = {
 1. Collect the scene: curl -s http://127.0.0.1:{port}/dsh-context-zip/wire and report the whole answer to me; then find the lines of the harness startup log that mention dsh-context-zip and quote them.
 2. Try this repair in order (report after each step): call the plugin's own takeover route, which writes a fresh copy of the built-in backend into the profile's slot and updates the stamp:
    curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
-3. Check it yourself: curl -s http://127.0.0.1:{port}/dsh-context-zip/wire should show wired:true with copiedAt later than processStartedAt (the row reads "restart required" in this process); stale may still be true and only turns over on a re-read after the restart.
+3. Check it yourself: curl -s http://127.0.0.1:{port}/dsh-context-zip/wire should show wired:true with copiedAt later than processStartedAt (the row reads "restart required" in this process); stale should be false (it is recomputed on every read, so it turns over as soon as the takeover writes the stamp). If it is still true, the takeover did not land; report that back to me.
 4. Report the output of every step. Do not restart DSH yourself.`,
   agentsSection: 'Sessions in effect',
   showMore: 'Show more',
