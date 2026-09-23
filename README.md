@@ -74,7 +74,19 @@ DSH 在上下文接近窗口上限时自动压缩会话。默认实现让模型�
 
 ## 截图
 
-真机截图待补，清单与占位说明见 `docs/截图待补清单.md`。要补 6 张：面板「压缩后端」行的未生效、正在接管、已生效、等待重启四态，检索工具输出示例，五段摘要示例。
+面板「压缩后端」那一行的四种状态：
+
+![未生效](docs/images/panel-wire-inactive.png)
+![正在接管](docs/images/panel-wire-taking.png)
+![已生效](docs/images/panel-wire-active.png)
+![等待重启](docs/images/panel-wire-restart.png)
+
+检索工具的输出与压缩后的五段式交接摘要：
+
+![history_segments 回显](docs/images/tool-history-segments.png)
+![五段式交接摘要](docs/images/summary-five-sections.png)
+
+四态截图取自隐藏虚拟桌面里的一个临时 DSH 实例（临时 `DSH_HOME`、端口 3190），不是用户真机；后两张的会话内容由本地桩模型驱动，用来展示界面形态，不作为能力或效果证据。逐图来源与脱敏口径见 `docs/截图清单.md`。
 
 ## 兼容性与边界
 

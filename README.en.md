@@ -74,7 +74,19 @@ The backend row reads as one line: a title with a question-mark bubble on the le
 
 ## Screenshots
 
-Real-device screenshots are still pending; the list and placeholders are in `docs/截图待补清单.md`. Six shots are due: four states of the backend row (Inactive, Taking over, Active, Restart required), one retrieval-tool transcript, one five-section summary sample.
+Four states of the backend row:
+
+![Inactive](docs/images/panel-wire-inactive.png)
+![Taking over](docs/images/panel-wire-taking.png)
+![Active](docs/images/panel-wire-active.png)
+![Restart required](docs/images/panel-wire-restart.png)
+
+A retrieval-tool transcript and a five-section handoff summary:
+
+![history_segments output](docs/images/tool-history-segments.png)
+![Five-section summary](docs/images/summary-five-sections.png)
+
+The four state shots come from a temporary DSH instance on a hidden virtual desktop (temporary `DSH_HOME`, port 3190), not from a user's machine; the conversations in the last two are driven by a local stub model and only show what the interface looks like, not what the plugin can do. Per-image provenance and redaction notes are in `docs/截图清单.md`.
 
 ## Compatibility and boundaries
 
