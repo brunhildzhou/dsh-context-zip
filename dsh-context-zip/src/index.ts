@@ -29,6 +29,7 @@ import {
   runManualCompaction,
 } from 'dsh-context-zip/engine';
 import { PROBE_TIMEOUT_MS, probeModel, readModelCatalog } from './models.ts';
+import { PRODUCER_KIND } from './producer.ts';
 import { ContextZipService, registerExportCommand } from './export.ts';
 import {
   ManualTargetError,
@@ -59,27 +60,17 @@ import { FALLBACK_ENABLED_COPY, REWRITE_ENABLED_COPY } from './panel-copy.ts';
 import { registerTools, setThrottleEnabled, setThrottleListener, setTracePath } from './tools.ts';
 
 /**
- * This plugin's own message-source kind.
- *
- * 0.1.7-alpha.1 deleted the shared catch-all `plugin` kind out of
- * `MessageSourceMap` and made the interface merge-extensible instead: the
- * harness's own words are now "each producer declares its own `kind` in its own
- * module; there is no shared catch-all `plugin` kind"
- * (`@deepseek-ai/dsh-llm/lib/types/message.d.ts`, above `MessageSourceMap`).
- *
- * This is a TYPE-ONLY declaration and changes nothing at runtime: the messages
- * already carry `kind: 'plugin'` and always did, `createUserMessage` reads no
- * `kind` at all, and consumers fall through a kind they do not know. Without it
- * the four construction sites below simply stop typechecking on this line, with
- * the JSON written to the log unchanged either way.
+ * This plugin's own message-source kind, declared into the harness's
+ * merge-extensible map. See `./producer.ts` for why the value is
+ * `plugin:context-zip` and why the retired literal must never come back.
  *
  * `& ContextFormed` rather than a hand-written `form` union, so the forms stay
  * the harness's closed set (`instructions`, `notice` + `summary`, or none).
  */
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
-    plugin: {
-      readonly kind: 'plugin';
+    'plugin:context-zip': {
+      readonly kind: 'plugin:context-zip';
       /** Stable id of the plugin that produced the message. */
       readonly plugin: string;
     } & ContextFormed;
@@ -1571,7 +1562,7 @@ async function pressureRatio(ctx, agent) {
 function reminderMessage(_ratio) {
   return createUserMessage({
     content: [{ type: 'text', text: NOTES_REMINDER_INSTRUCTION }],
-    source: { kind: 'plugin', plugin: 'context-zip', form: 'notice', summary: 'context pressure reminder' },
+    source: { kind: PRODUCER_KIND, plugin: 'context-zip', form: 'notice', summary: 'context pressure reminder' },
   });
 }
 

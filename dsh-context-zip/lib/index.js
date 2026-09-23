@@ -13,6 +13,12 @@ import {
 
 // src/models.ts
 import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
+
+// src/producer.ts
+import { PLUGIN_ID } from "dsh-context-zip/engine";
+var PRODUCER_KIND = `plugin:${PLUGIN_ID}`;
+
+// src/models.ts
 var PROBE_MAX_TOKENS = 8;
 var PROBE_SYSTEM_INSTRUCTION = "Reply with the single word: ok";
 var PROBE_USER_TEXT = "ok";
@@ -64,7 +70,7 @@ async function probeModel(llm, provider, model, options = {}) {
         // recall，没有「探活」这一档。该类型自己的文档写明「不声明的上下文就是文档化
         // 的默认档，按不透明内容呈现」，而这条消息只发不落盘、插件侧也从不回读 form，
         // 所以在这里不声明 form，而不是自造一个词表外的值。
-        source: { kind: "plugin", plugin: "context-zip" }
+        source: { kind: PRODUCER_KIND, plugin: "context-zip" }
       })
     ],
     system: PROBE_SYSTEM_INSTRUCTION,
@@ -3474,7 +3480,7 @@ async function pressureRatio(ctx, agent) {
 function reminderMessage(_ratio) {
   return createUserMessage2({
     content: [{ type: "text", text: NOTES_REMINDER_INSTRUCTION }],
-    source: { kind: "plugin", plugin: "context-zip", form: "notice", summary: "context pressure reminder" }
+    source: { kind: PRODUCER_KIND, plugin: "context-zip", form: "notice", summary: "context pressure reminder" }
   });
 }
 var index_default = {

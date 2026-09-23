@@ -374,6 +374,36 @@ async function checkDeclaredTypes(pluginRoot, label = 'exports') {
   }
 }
 
+async function checkProducerKind(pluginRoot, label = 'producer kind') {
+  const artifacts = ['lib/index.js', 'engine/lib/index.js', 'engine/lib/engine.js'];
+  let seen = 0;
+  for (const artifact of artifacts) {
+    let text;
+    try {
+      text = await readFile(join(pluginRoot, artifact), 'utf8');
+    } catch (error) {
+      ok(`${label}: ${artifact} is readable`, false);
+      failures.push(`  (reading it threw: ${error.message})`);
+      continue;
+    }
+    seen += 1;
+    const retired = text.match(/kind:\s*["']plugin["']/g) ?? [];
+    is(`${label}: ${artifact} carries no retired kind: 'plugin'`, retired.length, 0);
+  }
+  // A guard that found no artifact at all would look green while checking
+  // nothing, which is the one way this one could go quiet.
+  ok(`${label}: every bundled artifact was found`, seen === artifacts.length);
+
+  // The durable construction site has to go through the shared constant: an
+  // inline literal here is exactly the shape that shipped the defect.
+  const bundled = seen === artifacts.length ? await readFile(join(pluginRoot, 'lib/index.js'), 'utf8') : '';
+  is(
+    `${label}: the notes reminder builds its source from the shared constant`,
+    /kind:\s*PRODUCER_KIND[^}]*context pressure reminder/.test(bundled),
+    true,
+  );
+}
+
 const root = await mkdtemp(join(tmpdir(), 'context-zip-test-'));
 try {
   // A forked child: the first two events belong to the parent and must not be
@@ -7468,12 +7498,23 @@ try {
     is('context window: a non-array reads as no window', latestContextWindow(undefined), null);
   }
 
+  // The runtime value, not the text: the engine derives it from the plugin id,
+  // and this is the value the host's V4 admission actually reads.
+  const instructionSource = buildSummarizationInstruction('').source;
+  is('producer kind: the summarization instruction carries it', instructionSource.kind, 'plugin:context-zip');
+  is('producer kind: it is not the retired literal', instructionSource.kind === 'plugin', false);
+  is('producer kind: the plugin field survives for the mechanical filter', instructionSource.plugin, 'context-zip');
+
   await checkDeclaredTypes(resolve(here, '..'));
+  await checkProducerKind(resolve(here, '..'));
 
   // The delivered tree makes the same promise and is the copy that actually ships,
   // so it gets the same guard pointed at it whenever the pipeline names one.
   const delivered = deliverableDirectory();
-  if (delivered !== null) await checkDeclaredTypes(delivered, 'deliverable exports');
+  if (delivered !== null) {
+    await checkDeclaredTypes(delivered, 'deliverable exports');
+    await checkProducerKind(delivered, 'deliverable producer kind');
+  }
 
 } finally {
   await rm(root, { recursive: true, force: true });

@@ -21,6 +21,8 @@
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm';
 import type { LlmFailure } from '@deepseek-ai/dsh-llm';
 
+import { PRODUCER_KIND } from './producer.ts';
+
 /**
  * 探活请求的输出上限，单位 token。
  *
@@ -135,7 +137,7 @@ export async function probeModel(llm, provider, model, options: { signal?: Abort
         // recall，没有「探活」这一档。该类型自己的文档写明「不声明的上下文就是文档化
         // 的默认档，按不透明内容呈现」，而这条消息只发不落盘、插件侧也从不回读 form，
         // 所以在这里不声明 form，而不是自造一个词表外的值。
-        source: { kind: 'plugin', plugin: 'context-zip' },
+        source: { kind: PRODUCER_KIND, plugin: 'context-zip' },
       }),
     ],
     system: PROBE_SYSTEM_INSTRUCTION,

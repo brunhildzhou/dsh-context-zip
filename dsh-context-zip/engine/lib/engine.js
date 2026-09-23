@@ -580,13 +580,14 @@ function distinctiveTokens(text) {
   return out;
 }
 var PLUGIN_ID = "context-zip";
+var PRODUCER_KIND = `plugin:${PLUGIN_ID}`;
 function buildSummarizationInstruction(notes) {
   const parts = [SUMMARY_INSTRUCTION];
   const draft = typeof notes === "string" ? notes.trim() : "";
   if (draft.length > 0) parts.push(NOTES_MATERIAL_NOTE, "```text", draft, "```");
   return createUserMessage({
     content: [{ type: "text", text: parts.join("\n\n") }],
-    source: { kind: "plugin", plugin: PLUGIN_ID, form: "instructions" }
+    source: { kind: PRODUCER_KIND, plugin: PLUGIN_ID, form: "instructions" }
   });
 }
 function summarizeTarget(config, agent) {
@@ -717,7 +718,7 @@ async function runRewriteCall(ctx, config, summaryText, route, sessionId, signal
     messages: [
       createUserMessage({
         content: [{ type: "text", text: buildRewriteInstruction(summaryText) }],
-        source: { kind: "plugin", plugin: PLUGIN_ID, form: "instructions" }
+        source: { kind: PRODUCER_KIND, plugin: PLUGIN_ID, form: "instructions" }
       })
     ],
     system: REWRITE_SYSTEM_INSTRUCTION,
@@ -1139,6 +1140,7 @@ function createContextZipEngine(Base) {
 var engine_default = createContextZipEngine;
 export {
   PLUGIN_ID,
+  PRODUCER_KIND,
   addManualCompactionSeat,
   addedClaims,
   attributeSummarySections,

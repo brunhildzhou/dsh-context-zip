@@ -895,6 +895,18 @@ function distinctiveTokens(text) {
 export const PLUGIN_ID = 'context-zip';
 
 /**
+ * The producer-owned message-source kind these messages carry.
+ *
+ * 0.1.7-alpha.1 deleted the shared catch-all `plugin` kind and refuses that
+ * retired literal at the session-format boundary, so a message carrying it
+ * fails the whole turn instead of landing. The harness's own V3 migration
+ * rewrites released `{ kind: 'plugin', plugin: X }` rows to `plugin:X`, which is
+ * why this spelling also matches the rows already on disk. `source.plugin`
+ * stays beside it: the mechanical summary below filters by that field.
+ */
+export const PRODUCER_KIND = `plugin:${PLUGIN_ID}`;
+
+/**
  * Build the final user message of a summarization call.
  *
  * @param notes - the live notes draft, or '' when the session has none.
@@ -906,7 +918,7 @@ export function buildSummarizationInstruction(notes) {
   if (draft.length > 0) parts.push(NOTES_MATERIAL_NOTE, '```text', draft, '```');
   return createUserMessage({
     content: [{ type: 'text', text: parts.join('\n\n') }],
-    source: { kind: 'plugin', plugin: PLUGIN_ID, form: 'instructions' },
+    source: { kind: PRODUCER_KIND, plugin: PLUGIN_ID, form: 'instructions' },
   });
 }
 
@@ -1184,7 +1196,7 @@ export async function runRewriteCall(ctx, config, summaryText, route, sessionId,
     messages: [
       createUserMessage({
         content: [{ type: 'text', text: buildRewriteInstruction(summaryText) }],
-        source: { kind: 'plugin', plugin: PLUGIN_ID, form: 'instructions' },
+        source: { kind: PRODUCER_KIND, plugin: PLUGIN_ID, form: 'instructions' },
       }),
     ],
     system: REWRITE_SYSTEM_INSTRUCTION,

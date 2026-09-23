@@ -277,6 +277,17 @@ export declare function attributeSummarySections(summaryText: any, messages: any
 /** Plugin identity used for synthesized messages. */
 export declare const PLUGIN_ID = "context-zip";
 /**
+ * The producer-owned message-source kind these messages carry.
+ *
+ * 0.1.7-alpha.1 deleted the shared catch-all `plugin` kind and refuses that
+ * retired literal at the session-format boundary, so a message carrying it
+ * fails the whole turn instead of landing. The harness's own V3 migration
+ * rewrites released `{ kind: 'plugin', plugin: X }` rows to `plugin:X`, which is
+ * why this spelling also matches the rows already on disk. `source.plugin`
+ * stays beside it: the mechanical summary below filters by that field.
+ */
+export declare const PRODUCER_KIND = "plugin:context-zip";
+/**
  * Build the final user message of a summarization call.
  *
  * @param notes - the live notes draft, or '' when the session has none.

@@ -5,7 +5,7 @@
 [![license](https://img.shields.io/github/license/brunhildzhou/dsh-context-zip)](./LICENSE)
 [![stars](https://img.shields.io/github/stars/brunhildzhou/dsh-context-zip)](https://github.com/brunhildzhou/dsh-context-zip)
 
-**给 DeepSeek Harness（DSH）用的上下文压缩插件：接管宿主自带的压缩摘要器，改成固定五段式交接摘要，被压掉的原文进分段目录、可回查。** 版本 `0.1.3`，MIT 许可。见 [npm 上的 dsh-context-zip](https://www.npmjs.com/package/dsh-context-zip)。[English](./README.en.md)
+**给 DeepSeek Harness（DSH）用的上下文压缩插件：接管宿主自带的压缩摘要器，改成固定五段式交接摘要，被压掉的原文进分段目录、可回查。** 版本 `0.1.4`，MIT 许可。见 [npm 上的 dsh-context-zip](https://www.npmjs.com/package/dsh-context-zip)。[English](./README.en.md)
 
 ## 能力一览
 
@@ -89,7 +89,7 @@ DSH 在上下文接近窗口上限时自动压缩会话。默认实现让模型�
 
 ## 怎么自己验证
 
-插件自带运行时检查，`--installed` 加 `--deliverable` 一档实测 1273 条全过。跑法与覆盖见 `evidence/套件说明.md`。
+插件自带运行时检查，`--installed` 加 `--deliverable` 一档实测 1358 条全过。跑法与覆盖见 `evidence/套件说明.md`。
 
 ## 仓库布局
 
