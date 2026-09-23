@@ -4650,7 +4650,7 @@ try {
     is('attention: the fourth question mark opens on click', top?.props?.['aria-expanded'], 'true');
     const topBubbleText = textOf(findClass(tree, 'dsh-context-zip__bubble'));
     is('attention: the bubble names the current state', topBubbleText.startsWith('当前状态：未生效。'), true);
-    is('attention: the bubble carries the repair prompt', topBubbleText.includes('dsh-context-zip@latest --legacy-peer-deps'), true);
+    is('attention: the bubble carries the repair prompt', topBubbleText.includes("curl -s -X POST -H 'content-type: application/json'"), true);
     is('attention: the prompt home placeholder is filled', topBubbleText.includes('/home/u/profiles/web'), true);
     is('attention: no placeholder survives in the bubble', /[{](home|profile|port)[}]/u.test(topBubbleText), false);
     const topCopy = findClass(findClass(tree, 'dsh-context-zip__bubble'), 'dsh-context-zip__copy');

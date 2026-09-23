@@ -419,22 +419,19 @@ var ZH = {
   migrateMain: "\u8BBE\u7F6E\u672A\u8FC1\u79FB",
   promptInactive: `\u80CC\u666F\uFF1A\u6211\u7684 DSH \u88C5\u4E86 dsh-context-zip\uFF0C\u4F46\u538B\u7F29\u63A5\u7BA1\u6CA1\u751F\u6548\uFF0C\u538B\u7F29\u8FD8\u5728\u8D70\u5BBF\u4E3B\u5185\u7F6E\u540E\u7AEF\u3002\u8BF7\u6309\u4E0B\u9762\u505A\uFF0C\u8FD9\u4E9B\u6B65\u9AA4\u90FD\u4E0D\u9700\u8981\u754C\u9762\u64CD\u4F5C\u3002
 
-1. \u786E\u8BA4\u63D2\u4EF6\u5728\uFF1A\u8BFB {home}/profiles/{profile}/package.json\uFF0C\u770B dependencies \u91CC\u6709\u6CA1\u6709 dsh-context-zip\u3001dsh.profile.bundles \u91CC\u6709\u6CA1\u6709\u5B83\u3002\u7F3A\u4E86\u5C31\u88C5\uFF1Adsh plugin --profile {profile} add dsh-context-zip
-2. \u5199\u5165\u63A5\u7BA1\uFF08\u4E0D\u7528\u70B9\u754C\u9762\uFF09\uFF1A
-   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
-   npm i dsh-context-zip@latest --legacy-peer-deps
-   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
-3. \u81EA\u67E5\uFF1Ainstall.mjs \u5E94\u6253\u5370 installed into \u2026\uFF0C\u5E76\u5217\u51FA\u63D2\u4EF6\u4E0E\u91CD\u5B9A\u5411\u4E24\u884C\uFF1B{home}/profiles/{profile}/node_modules/@deepseek-ai/dsh-compaction-basic/ \u4E0B\u5E94\u6709 base.js\u3001base.json\u3001index.js\u3001package.json\u3002
-4. \u56DE\u62A5\uFF1A\u6BCF\u6B65\u547D\u4EE4\u7684\u8F93\u51FA\uFF0C\u4EE5\u53CA base.json \u7684\u5185\u5BB9\u3002
+1. \u5199\u5165\u63A5\u7BA1\uFF08\u4E0D\u7528\u70B9\u754C\u9762\uFF09\uFF1A\u8C03\u63D2\u4EF6\u81EA\u5DF1\u7684\u63A5\u7BA1\u8DEF\u7531\uFF0C\u628A\u5185\u7F6E\u540E\u7AEF\u7684\u4E00\u4EFD\u65B0\u62F7\u8D1D\u5199\u8FDB profile \u7684\u91CD\u5B9A\u5411\u69FD\u4F4D\u5E76\u66F4\u65B0\u6233\uFF1A
+   curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
+   \u5B83\u53EA\u91CD\u5199 profile \u91CC\u90A3\u4E00\u4EFD\u91CD\u5B9A\u5411\uFF08package.json\u3001index.js\u3001base.js \u4E0E\u6233\uFF09\uFF0C\u4E0D\u78B0\u63D2\u4EF6\u672C\u4F53\uFF0C\u5347\u7EA7\u4ECD\u8D70 dsh plugin add\u3002
+2. \u515C\u5E95\uFF08\u53EA\u6709\u7B2C 1 \u6B65\u62A5\u300C\u672C\u63D2\u4EF6\u7684 redirect \u6587\u4EF6\u7F3A\u5931\u300D\u624D\u505A\uFF09\uFF1A\u8BFB {home}/profiles/{profile}/package.json\uFF0C\u770B dependencies \u91CC\u6709\u6CA1\u6709 dsh-context-zip\u3001dsh.profile.bundles \u91CC\u6709\u6CA1\u6709\u5B83\uFF1B\u786E\u5B9E\u7F3A\u4E86\u624D\u88C5\uFF1Adsh plugin --profile {profile} add dsh-context-zip\uFF0C\u88C5\u5B8C\u518D\u8DD1\u4E00\u6B21\u7B2C 1 \u6B65\u3002
+3. \u786E\u8BA4\uFF1Acurl -s http://127.0.0.1:{port}/dsh-context-zip/wire \u5E94\u770B\u5230 wired:true\u3001copiedAt \u665A\u4E8E processStartedAt\uFF08\u672C\u6B21\u8FDB\u7A0B\u91CC\u72B6\u6001\u4F1A\u53D8\u6210\u300C\u7B49\u5F85\u91CD\u542F\u300D\uFF09\uFF1Bstale \u53EF\u80FD\u4ECD\u4E3A true\uFF0C\u90A3\u8981\u7B49\u91CD\u542F\u540E\u91CD\u8BFB\u624D\u7FFB\uFF0C\u4E0D\u7B97\u8FD9\u6B21\u63A5\u7BA1\u5931\u8D25\u3002
+4. \u56DE\u62A5\uFF1A\u7B2C 1 \u6B65\u4E0E\u7B2C 3 \u6B65\u7684\u5B8C\u6574\u8FD4\u56DE\u3002
 5. \u4E0D\u8981\u81EA\u884C\u91CD\u542F DSH\u3002`,
   promptUpdate: `\u80CC\u666F\uFF1A\u6211\u7684 dsh-context-zip \u63D0\u793A\u91CD\u5B9A\u5411\u9700\u8981\u66F4\u65B0\uFF08\u5B83\u5305\u4F4F\u7684\u5185\u7F6E\u538B\u7F29\u540E\u7AEF\u7248\u672C\u6BD4\u5BBF\u4E3B\u65E7\uFF09\u3002\u8BF7\u6309\u4E0B\u9762\u505A\uFF0C\u5168\u7A0B\u4E0D\u9700\u8981\u754C\u9762\u64CD\u4F5C\u3002
 
-1. \u8BB0\u73B0\u72B6\uFF1Acurl http://127.0.0.1:{port}/dsh-context-zip/wire \uFF0C\u628A version \u4E0E current \u62A5\u7ED9\u6211\u3002
-2. \u5237\u65B0\u91CD\u5B9A\u5411\uFF1A
-   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
-   npm i dsh-context-zip@latest --legacy-peer-deps
-   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
-3. \u518D curl \u4E00\u6B21\u7B2C 1 \u6B65\u7684\u5730\u5740\uFF0C\u786E\u8BA4 version \u4E0E current \u4E00\u81F4\u3001stale \u4E3A false\u3002
+1. \u8BB0\u73B0\u72B6\uFF1Acurl -s http://127.0.0.1:{port}/dsh-context-zip/wire \uFF0C\u628A version \u4E0E current \u62A5\u7ED9\u6211\u3002
+2. \u5237\u65B0\u91CD\u5B9A\u5411\uFF1A\u8C03\u63D2\u4EF6\u81EA\u5DF1\u7684\u63A5\u7BA1\u8DEF\u7531\uFF0C\u628A\u5185\u7F6E\u540E\u7AEF\u7684\u4E00\u4EFD\u65B0\u62F7\u8D1D\u5199\u8FDB profile \u7684\u69FD\u4F4D\u5E76\u66F4\u65B0\u6233\uFF1A
+   curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
+3. \u518D curl \u4E00\u6B21\u7B2C 1 \u6B65\u7684\u5730\u5740\uFF0C\u786E\u8BA4 wired:true\u3001copiedAt \u665A\u4E8E processStartedAt\uFF08\u672C\u6B21\u8FDB\u7A0B\u91CC\u72B6\u6001\u4F1A\u53D8\u6210\u300C\u7B49\u5F85\u91CD\u542F\u300D\uFF09\uFF1Bstale \u53EF\u80FD\u4ECD\u4E3A true\uFF0C\u90A3\u8981\u7B49\u91CD\u542F\u540E\u91CD\u8BFB\u624D\u7FFB\u3002
 4. \u56DE\u62A5\u4E24\u6B21\u8FD4\u56DE\u3002\u4E0D\u8981\u81EA\u884C\u91CD\u542F DSH\u3002`,
   promptMigrate: `\u80CC\u666F\uFF1A\u6211\u7684 DSH \u4ECE 0.1.5/0.1.6 \u5347\u5230 0.1.7 \u4E4B\u540E\uFF0Cdsh-context-zip \u7684\u8BBE\u7F6E\u6CA1\u8DDF\u8FC7\u6765\uFF08\u6458\u8981\u515C\u5E95\u3001\u6458\u8981\u91CD\u6392\u53D8\u5173\uFF0C\u5DF2\u751F\u6548\u4F1A\u8BDD\u53D8\u300C\u65E0\u300D\uFF09\u3002\u539F\u56E0\u662F 0.1.7 \u628A settings.yaml \u6539\u540D\u6210 settings.yaml.imported\uFF0C\u53EA\u8FC1\u79FB\u767D\u540D\u5355\u91CC\u7684\u6BB5\uFF0C\u63D2\u4EF6\u6BB5\u88AB\u843D\u4E0B\u3002\u8BF7\u6309\u4E0B\u9762\u505A\uFF0C\u5168\u7A0B\u4E0D\u9700\u8981\u754C\u9762\u64CD\u4F5C\u3002
 
@@ -448,12 +445,10 @@ var ZH = {
 5. \u56DE\u62A5\uFF1A\u6539\u52A8\u524D\u540E\u7684\u7247\u6BB5 + \u63A5\u53E3\u8FD4\u56DE\u3002\u4E0D\u8981\u81EA\u884C\u91CD\u542F DSH\u3002`,
   promptRepair: `\u80CC\u666F\uFF1A\u6211\u7684 DSH \u4E0A dsh-context-zip \u7684\u538B\u7F29\u63A5\u7BA1\u72B6\u6001\u5F02\u5E38\uFF08\u9762\u677F\u663E\u793A\uFF1A{state}\uFF09\u3002\u8BF7\u4F60\u67E5\u6E05\u5E76\u4FEE\u597D\uFF0C\u5168\u7A0B\u4E0D\u9700\u8981\u754C\u9762\u64CD\u4F5C\u3002
 
-1. \u6536\u96C6\u73B0\u573A\uFF1Acurl http://127.0.0.1:{port}/dsh-context-zip/wire \uFF0C\u628A\u5B8C\u6574\u8FD4\u56DE\u62A5\u7ED9\u6211\uFF1B\u518D\u627E\u51FA harness \u542F\u52A8\u65E5\u5FD7\u91CC\u542B dsh-context-zip \u7684\u884C\u5E76\u6458\u51FA\u6765\u3002
-2. \u6309\u987A\u5E8F\u8BD5\u8FD9\u4E2A\u4FEE\u6CD5\uFF08\u505A\u5B8C\u4E00\u6B65\u5C31\u56DE\u62A5\uFF09\uFF1A
-   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
-   npm i dsh-context-zip@latest --legacy-peer-deps
-   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
-3. \u81EA\u67E5\uFF1A{home}/profiles/{profile}/node_modules/@deepseek-ai/dsh-compaction-basic/ \u4E0B\u5E94\u6709 base.js\u3001base.json\u3001index.js\u3001package.json\uFF1B\u518D curl \u4E00\u6B21 /dsh-context-zip/wire\uFF0Cstale \u5E94\u4E3A false\u3002
+1. \u6536\u96C6\u73B0\u573A\uFF1Acurl -s http://127.0.0.1:{port}/dsh-context-zip/wire \uFF0C\u628A\u5B8C\u6574\u8FD4\u56DE\u62A5\u7ED9\u6211\uFF1B\u518D\u627E\u51FA harness \u542F\u52A8\u65E5\u5FD7\u91CC\u542B dsh-context-zip \u7684\u884C\u5E76\u6458\u51FA\u6765\u3002
+2. \u6309\u987A\u5E8F\u8BD5\u8FD9\u4E2A\u4FEE\u6CD5\uFF08\u505A\u5B8C\u4E00\u6B65\u5C31\u56DE\u62A5\uFF09\uFF1A\u8C03\u63D2\u4EF6\u81EA\u5DF1\u7684\u63A5\u7BA1\u8DEF\u7531\uFF0C\u628A\u5185\u7F6E\u540E\u7AEF\u7684\u4E00\u4EFD\u65B0\u62F7\u8D1D\u5199\u8FDB profile \u7684\u69FD\u4F4D\u5E76\u66F4\u65B0\u6233\uFF1A
+   curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
+3. \u786E\u8BA4\uFF1Acurl -s http://127.0.0.1:{port}/dsh-context-zip/wire \u5E94\u770B\u5230 wired:true\u3001copiedAt \u665A\u4E8E processStartedAt\uFF08\u672C\u6B21\u8FDB\u7A0B\u91CC\u72B6\u6001\u4F1A\u53D8\u6210\u300C\u7B49\u5F85\u91CD\u542F\u300D\uFF09\uFF1Bstale \u53EF\u80FD\u4ECD\u4E3A true\uFF0C\u90A3\u8981\u7B49\u91CD\u542F\u540E\u91CD\u8BFB\u624D\u7FFB\u3002
 4. \u56DE\u62A5\u6BCF\u6B65\u8F93\u51FA\u3002\u4E0D\u8981\u81EA\u884C\u91CD\u542F DSH\u3002`,
   // ── 已生效会话（只读）
   agentsSection: "\u5DF2\u751F\u6548\u4F1A\u8BDD",
@@ -579,22 +574,19 @@ var EN = {
   migrateMain: "Settings not migrated",
   promptInactive: `Background: my DSH has dsh-context-zip installed, but the compaction takeover is not in effect and compaction still goes through the host's built-in backend. Please do the following; none of these steps needs the UI.
 
-1. Confirm the plugin is there: read {home}/profiles/{profile}/package.json and check that dsh-context-zip is in dependencies and in dsh.profile.bundles. If it is missing, install it: dsh plugin --profile {profile} add dsh-context-zip
-2. Write the takeover (no clicking in the UI):
-   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
-   npm i dsh-context-zip@latest --legacy-peer-deps
-   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
-3. Check it yourself: install.mjs should print installed into \u2026 and list the plugin and the redirect as two lines; {home}/profiles/{profile}/node_modules/@deepseek-ai/dsh-compaction-basic/ should hold base.js, base.json, index.js and package.json.
-4. Report back: the output of every command, plus the contents of base.json.
+1. Write the takeover (no clicking in the UI): call the plugin's own takeover route, which writes a fresh copy of the built-in backend into the profile's slot and updates the stamp:
+   curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
+   It rewrites only that redirect copy in the profile (package.json, index.js, base.js and the stamp); the plugin itself is left alone, so upgrades still go through dsh plugin add.
+2. Fallback (only if step 1 reports this plugin's redirect files are missing): read {home}/profiles/{profile}/package.json and check that dsh-context-zip is in dependencies and in dsh.profile.bundles; only if it is really missing, install it: dsh plugin --profile {profile} add dsh-context-zip, then run step 1 again.
+3. Check it yourself: curl -s http://127.0.0.1:{port}/dsh-context-zip/wire should show wired:true with copiedAt later than processStartedAt (the row reads "restart required" in this process); stale may still be true, which only a re-read after the restart turns over, so it does not mean this takeover failed.
+4. Report back: the whole answer of steps 1 and 3.
 5. Do not restart DSH yourself.`,
   promptUpdate: `Background: my dsh-context-zip says the redirect needs an update (the built-in compaction backend it wraps is older than the one the host ships). Please do the following; no UI steps at any point.
 
-1. Record the current state: curl http://127.0.0.1:{port}/dsh-context-zip/wire and report version and current to me.
-2. Refresh the redirect:
-   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
-   npm i dsh-context-zip@latest --legacy-peer-deps
-   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
-3. curl the address from step 1 again and confirm version and current match and stale is false.
+1. Record the current state: curl -s http://127.0.0.1:{port}/dsh-context-zip/wire and report version and current to me.
+2. Refresh the redirect: call the plugin's own takeover route, which writes a fresh copy of the built-in backend into the profile's slot and updates the stamp:
+   curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
+3. curl the address from step 1 again and confirm wired:true with copiedAt later than processStartedAt (the row reads "restart required" in this process); stale may still be true and only turns over on a re-read after the restart.
 4. Report both answers. Do not restart DSH yourself.`,
   promptMigrate: `Background: after my DSH was upgraded from 0.1.5/0.1.6 to 0.1.7, the dsh-context-zip settings did not come along (the mechanical summary fallback and the summary re-layout turned off, and the sessions in effect became "none"). The cause is that 0.1.7 renamed settings.yaml to settings.yaml.imported and migrates only a whitelist of sections, so the plugin section was left behind. Please do the following; no UI steps at any point.
 
@@ -608,12 +600,10 @@ var EN = {
 5. Report back: the fragments before and after the change, plus the route's answer. Do not restart DSH yourself.`,
   promptRepair: `Background: the compaction takeover of dsh-context-zip on my DSH is in a bad state (the panel shows: {state}). Please find out why and fix it; no UI steps at any point.
 
-1. Collect the scene: curl http://127.0.0.1:{port}/dsh-context-zip/wire and report the whole answer to me; then find the lines of the harness startup log that mention dsh-context-zip and quote them.
-2. Try this repair in order (report after each step):
-   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
-   npm i dsh-context-zip@latest --legacy-peer-deps
-   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
-3. Check it yourself: {home}/profiles/{profile}/node_modules/@deepseek-ai/dsh-compaction-basic/ should hold base.js, base.json, index.js and package.json; then curl /dsh-context-zip/wire again and stale should be false.
+1. Collect the scene: curl -s http://127.0.0.1:{port}/dsh-context-zip/wire and report the whole answer to me; then find the lines of the harness startup log that mention dsh-context-zip and quote them.
+2. Try this repair in order (report after each step): call the plugin's own takeover route, which writes a fresh copy of the built-in backend into the profile's slot and updates the stamp:
+   curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
+3. Check it yourself: curl -s http://127.0.0.1:{port}/dsh-context-zip/wire should show wired:true with copiedAt later than processStartedAt (the row reads "restart required" in this process); stale may still be true and only turns over on a re-read after the restart.
 4. Report the output of every step. Do not restart DSH yourself.`,
   agentsSection: "Sessions in effect",
   showMore: "Show more",

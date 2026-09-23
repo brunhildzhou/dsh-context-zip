@@ -222,22 +222,19 @@ const ZH = {
   migrateMain: '设置未迁移',
   promptInactive: `背景：我的 DSH 装了 dsh-context-zip，但压缩接管没生效，压缩还在走宿主内置后端。请按下面做，这些步骤都不需要界面操作。
 
-1. 确认插件在：读 {home}/profiles/{profile}/package.json，看 dependencies 里有没有 dsh-context-zip、dsh.profile.bundles 里有没有它。缺了就装：dsh plugin --profile {profile} add dsh-context-zip
-2. 写入接管（不用点界面）：
-   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
-   npm i dsh-context-zip@latest --legacy-peer-deps
-   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
-3. 自查：install.mjs 应打印 installed into …，并列出插件与重定向两行；{home}/profiles/{profile}/node_modules/@deepseek-ai/dsh-compaction-basic/ 下应有 base.js、base.json、index.js、package.json。
-4. 回报：每步命令的输出，以及 base.json 的内容。
+1. 写入接管（不用点界面）：调插件自己的接管路由，把内置后端的一份新拷贝写进 profile 的重定向槽位并更新戳：
+   curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
+   它只重写 profile 里那一份重定向（package.json、index.js、base.js 与戳），不碰插件本体，升级仍走 dsh plugin add。
+2. 兜底（只有第 1 步报「本插件的 redirect 文件缺失」才做）：读 {home}/profiles/{profile}/package.json，看 dependencies 里有没有 dsh-context-zip、dsh.profile.bundles 里有没有它；确实缺了才装：dsh plugin --profile {profile} add dsh-context-zip，装完再跑一次第 1 步。
+3. 确认：curl -s http://127.0.0.1:{port}/dsh-context-zip/wire 应看到 wired:true、copiedAt 晚于 processStartedAt（本次进程里状态会变成「等待重启」）；stale 可能仍为 true，那要等重启后重读才翻，不算这次接管失败。
+4. 回报：第 1 步与第 3 步的完整返回。
 5. 不要自行重启 DSH。`,
   promptUpdate: `背景：我的 dsh-context-zip 提示重定向需要更新（它包住的内置压缩后端版本比宿主旧）。请按下面做，全程不需要界面操作。
 
-1. 记现状：curl http://127.0.0.1:{port}/dsh-context-zip/wire ，把 version 与 current 报给我。
-2. 刷新重定向：
-   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
-   npm i dsh-context-zip@latest --legacy-peer-deps
-   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
-3. 再 curl 一次第 1 步的地址，确认 version 与 current 一致、stale 为 false。
+1. 记现状：curl -s http://127.0.0.1:{port}/dsh-context-zip/wire ，把 version 与 current 报给我。
+2. 刷新重定向：调插件自己的接管路由，把内置后端的一份新拷贝写进 profile 的槽位并更新戳：
+   curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
+3. 再 curl 一次第 1 步的地址，确认 wired:true、copiedAt 晚于 processStartedAt（本次进程里状态会变成「等待重启」）；stale 可能仍为 true，那要等重启后重读才翻。
 4. 回报两次返回。不要自行重启 DSH。`,
   promptMigrate: `背景：我的 DSH 从 0.1.5/0.1.6 升到 0.1.7 之后，dsh-context-zip 的设置没跟过来（摘要兜底、摘要重排变关，已生效会话变「无」）。原因是 0.1.7 把 settings.yaml 改名成 settings.yaml.imported，只迁移白名单里的段，插件段被落下。请按下面做，全程不需要界面操作。
 
@@ -251,12 +248,10 @@ const ZH = {
 5. 回报：改动前后的片段 + 接口返回。不要自行重启 DSH。`,
   promptRepair: `背景：我的 DSH 上 dsh-context-zip 的压缩接管状态异常（面板显示：{state}）。请你查清并修好，全程不需要界面操作。
 
-1. 收集现场：curl http://127.0.0.1:{port}/dsh-context-zip/wire ，把完整返回报给我；再找出 harness 启动日志里含 dsh-context-zip 的行并摘出来。
-2. 按顺序试这个修法（做完一步就回报）：
-   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
-   npm i dsh-context-zip@latest --legacy-peer-deps
-   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
-3. 自查：{home}/profiles/{profile}/node_modules/@deepseek-ai/dsh-compaction-basic/ 下应有 base.js、base.json、index.js、package.json；再 curl 一次 /dsh-context-zip/wire，stale 应为 false。
+1. 收集现场：curl -s http://127.0.0.1:{port}/dsh-context-zip/wire ，把完整返回报给我；再找出 harness 启动日志里含 dsh-context-zip 的行并摘出来。
+2. 按顺序试这个修法（做完一步就回报）：调插件自己的接管路由，把内置后端的一份新拷贝写进 profile 的槽位并更新戳：
+   curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
+3. 确认：curl -s http://127.0.0.1:{port}/dsh-context-zip/wire 应看到 wired:true、copiedAt 晚于 processStartedAt（本次进程里状态会变成「等待重启」）；stale 可能仍为 true，那要等重启后重读才翻。
 4. 回报每步输出。不要自行重启 DSH。`,
   // ── 已生效会话（只读）
   agentsSection: '已生效会话',
@@ -386,22 +381,19 @@ const EN = {
   migrateMain: 'Settings not migrated',
   promptInactive: `Background: my DSH has dsh-context-zip installed, but the compaction takeover is not in effect and compaction still goes through the host's built-in backend. Please do the following; none of these steps needs the UI.
 
-1. Confirm the plugin is there: read {home}/profiles/{profile}/package.json and check that dsh-context-zip is in dependencies and in dsh.profile.bundles. If it is missing, install it: dsh plugin --profile {profile} add dsh-context-zip
-2. Write the takeover (no clicking in the UI):
-   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
-   npm i dsh-context-zip@latest --legacy-peer-deps
-   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
-3. Check it yourself: install.mjs should print installed into … and list the plugin and the redirect as two lines; {home}/profiles/{profile}/node_modules/@deepseek-ai/dsh-compaction-basic/ should hold base.js, base.json, index.js and package.json.
-4. Report back: the output of every command, plus the contents of base.json.
+1. Write the takeover (no clicking in the UI): call the plugin's own takeover route, which writes a fresh copy of the built-in backend into the profile's slot and updates the stamp:
+   curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
+   It rewrites only that redirect copy in the profile (package.json, index.js, base.js and the stamp); the plugin itself is left alone, so upgrades still go through dsh plugin add.
+2. Fallback (only if step 1 reports this plugin's redirect files are missing): read {home}/profiles/{profile}/package.json and check that dsh-context-zip is in dependencies and in dsh.profile.bundles; only if it is really missing, install it: dsh plugin --profile {profile} add dsh-context-zip, then run step 1 again.
+3. Check it yourself: curl -s http://127.0.0.1:{port}/dsh-context-zip/wire should show wired:true with copiedAt later than processStartedAt (the row reads "restart required" in this process); stale may still be true, which only a re-read after the restart turns over, so it does not mean this takeover failed.
+4. Report back: the whole answer of steps 1 and 3.
 5. Do not restart DSH yourself.`,
   promptUpdate: `Background: my dsh-context-zip says the redirect needs an update (the built-in compaction backend it wraps is older than the one the host ships). Please do the following; no UI steps at any point.
 
-1. Record the current state: curl http://127.0.0.1:{port}/dsh-context-zip/wire and report version and current to me.
-2. Refresh the redirect:
-   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
-   npm i dsh-context-zip@latest --legacy-peer-deps
-   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
-3. curl the address from step 1 again and confirm version and current match and stale is false.
+1. Record the current state: curl -s http://127.0.0.1:{port}/dsh-context-zip/wire and report version and current to me.
+2. Refresh the redirect: call the plugin's own takeover route, which writes a fresh copy of the built-in backend into the profile's slot and updates the stamp:
+   curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
+3. curl the address from step 1 again and confirm wired:true with copiedAt later than processStartedAt (the row reads "restart required" in this process); stale may still be true and only turns over on a re-read after the restart.
 4. Report both answers. Do not restart DSH yourself.`,
   promptMigrate: `Background: after my DSH was upgraded from 0.1.5/0.1.6 to 0.1.7, the dsh-context-zip settings did not come along (the mechanical summary fallback and the summary re-layout turned off, and the sessions in effect became "none"). The cause is that 0.1.7 renamed settings.yaml to settings.yaml.imported and migrates only a whitelist of sections, so the plugin section was left behind. Please do the following; no UI steps at any point.
 
@@ -415,12 +407,10 @@ const EN = {
 5. Report back: the fragments before and after the change, plus the route's answer. Do not restart DSH yourself.`,
   promptRepair: `Background: the compaction takeover of dsh-context-zip on my DSH is in a bad state (the panel shows: {state}). Please find out why and fix it; no UI steps at any point.
 
-1. Collect the scene: curl http://127.0.0.1:{port}/dsh-context-zip/wire and report the whole answer to me; then find the lines of the harness startup log that mention dsh-context-zip and quote them.
-2. Try this repair in order (report after each step):
-   rm -rf /tmp/dshzip && mkdir -p /tmp/dshzip && cd /tmp/dshzip
-   npm i dsh-context-zip@latest --legacy-peer-deps
-   node node_modules/dsh-context-zip/install.mjs --profile-dir {home}/profiles/{profile}
-3. Check it yourself: {home}/profiles/{profile}/node_modules/@deepseek-ai/dsh-compaction-basic/ should hold base.js, base.json, index.js and package.json; then curl /dsh-context-zip/wire again and stale should be false.
+1. Collect the scene: curl -s http://127.0.0.1:{port}/dsh-context-zip/wire and report the whole answer to me; then find the lines of the harness startup log that mention dsh-context-zip and quote them.
+2. Try this repair in order (report after each step): call the plugin's own takeover route, which writes a fresh copy of the built-in backend into the profile's slot and updates the stamp:
+   curl -s -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:{port}/dsh-context-zip/wire
+3. Check it yourself: curl -s http://127.0.0.1:{port}/dsh-context-zip/wire should show wired:true with copiedAt later than processStartedAt (the row reads "restart required" in this process); stale may still be true and only turns over on a re-read after the restart.
 4. Report the output of every step. Do not restart DSH yourself.`,
   agentsSection: 'Sessions in effect',
   showMore: 'Show more',
