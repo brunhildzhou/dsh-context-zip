@@ -2300,7 +2300,7 @@ try {
     const captured = [];
     let statusAnswer = { wired: false, version: null, copiedAt: null, stale: false, foreign: false };
     let statusThrows = null;
-    let actionAnswer = { wired: true, version: '9.9.9-shipped', copiedAt: '2026-09-21T10:00:00.000Z', source: '/tmp/shipped' };
+    let actionAnswer = { wired: true, version: '9.9.9-shipped', copiedAt: '2026-09-21T10:00:00.000Z', source: '<tmp>/shipped' };
     let actionThrows = null;
     const dispose = registerRoutes(
       { get: (name) => (name === 'webServer' ? { register: (spec) => { captured.push(spec); return () => {}; } } : undefined) },

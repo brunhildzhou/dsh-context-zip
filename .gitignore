@@ -11,3 +11,9 @@ Thumbs.db
 # 本地跑批留下的
 /tmp/
 *.tmp
+
+# 本地工具产物与不该进公开仓库的私密文件
+graphify-out/
+.env
+*.pem
+*.key
