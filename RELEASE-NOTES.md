@@ -1,9 +1,23 @@
 # 发布说明
 
-**版本**：`0.1.8`
-**日期**：2026.09.24（北京时间）
+**版本**：`0.1.9`
+**日期**：2026.09.29（北京时间）
 **对应内部快照**：`内部开发快照`
 **许可**：MIT
+
+## 0.1.9 改了什么
+
+**peer 范围补上 0.2.0 线：宿主从 `0.2.0-rc.2` 起把插件清单里每一条 `@deepseek-ai/dsh-*` peer 与运行版本逐条比对，本插件原区间全部以 `<0.2.0-0` 收尾，判定不通过，插件被整包跳过。这一版只改 peer 区间与版本号，源码一行未动。**
+
+### 修掉：DSH 0.2.0 上插件被整包跳过
+
+- **症状**：升级到宿主 `0.2.0-rc.2` 后启动，stderr 打印 `dsh: skipping profile bundle "dsh-context-zip": Plugin dsh-context-zip@0.1.8 is incompatible with dsh 0.2.0-rc.2: peerDependencies {...}`。bundle patch 层不加载，它那一行不会被插入，压缩接管、设置页、检索工具、工作笔记与面板全都不在。压缩本身还在跑：profile 里那份重定向仍回答 `compaction-basic`，`dsh-context-zip/engine` 照常被它加载，但用户设置与工作笔记不再生效。
+- **根因**：`@deepseek-ai/dsh-app-boot` 的 `evaluatePluginCompatibility()` 对每一条 `@deepseek-ai/dsh` 或 `@deepseek-ai/dsh-*` peer 做 semver 判定（`includePrerelease: true`），不通过即判不兼容。`loadProfileDirectory()` 对 `dsh.profile.bundles` 里不兼容的 bundle 直接跳过并记入 `skippedBundles`，`prepareProfileEntries()` 对不兼容的行置 `disabled` 并打印警告。插件的 12 条区间写作 `>=0.1.5-rc.2 <0.2.0-0 || >=0.1.6-0 <0.2.0-0 || >=0.1.7-alpha.1 <0.2.0-0`，末项上界 `<0.2.0-0` 排除了整个 0.2.0 线：预发布版比较里 `0.2.0-0` 小于 `0.2.0-rc.2`，判定落在区间外。0.1.7 那次踩的是同一机制的另一半，预发布版只被同级或更低的比较器接受。
+- **修法**：12 条 peer 各追加一段 `|| >=0.2.0-rc.2 <0.3.0-0`，`engine/package.json` 的 2 条同样处理，历史区间一律不动，保持区间并集。已用 semver 7.8.5 实测：`0.1.5-rc.2` 到 `0.1.7-rc.2` 判定不变，`0.2.0-rc.2`、`0.2.0`、`0.2.5` 由 false 变 true，`0.2.0-rc.1` 与 `0.3.0-rc.1` 仍为 false（前者已被 rc.2 取代，未纳入验证范围）。
+- **未改的部分**：这一版没有源码改动。核对方式是把插件 import 的 7 个外部包在 `0.1.7-rc.2` 与 `0.2.0-rc.2` 之间逐字节比对：`compaction`、`compaction-basic`、`tools`、`home-paths`、`agent`、`commands`、`session-query`、`settings`、`system-prompt`、`token-meter` 完全一致；`dsh-llm` 只差一个内部 `typert.host.js`；`dsh-session` 只差 `repair` 模块（新增 `ToolCallRecovery`，`Session` 与 `SESSION_FORMAT_VERSION = 4` 不变，插件不引用该模块）。重定向依赖的那处阈值表达式在 `0.2.0-rc.2` 的后端里仍原样出现一次，定点改写照旧成立。设置分支靠特性探测 `typeof settings.register !== 'function'` 而非版本号，客户端两个插槽与模块加载协议均未变。
+- **影响面**：只影响宿主 0.2.0 线，`0.1.x` 上的判定与行为不变。装到 `0.2.0-rc.2` 之后这个插件不再需要 `compatibility.json` 的精确版本豁免；`0.1.8` 及以前在 0.2.0 上仍需豁免才能加载。
+- **实机**：宿主 `0.2.0-rc.2` 上，0.1.8 是靠 `DATA/profiles/web/compatibility.json` 里 `dsh-context-zip@0.1.8: ["0.2.0-rc.2"]` 一条精确版本豁免才加载的，`/dsh-context-zip/live` 报 `effective.compaction = "plugin"`、`source = "settings"`，`/settings`、`/models`、`/segments` 均 200。重定向在 0.2.0 后端上重新接线后 `/wire` 报 `stale=false`、`patch=ratio-only`、`patchObserved=ratio-only`、`patchDrift=false`、`attention=null`。
+- **套件**：1386 条为只给 `--installed` 的口径，1396 条为同时给 `--installed` 与 `--deliverable` 的口径，本次两档与 0.1.8 相同，全过。
 
 ## 0.1.8 改了什么
 
