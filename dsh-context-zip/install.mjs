@@ -927,7 +927,12 @@ await mkdir(join(profileDir, 'node_modules'), { recursive: true });
 //
 // `test/build` is deliberately NOT excluded: it is the built test entry, and
 // `test/run.mjs --installed <this very directory>` reads it from here.
-const DEV_ONLY = /[\\/](node_modules|\.git|graphify-out)([\\/]|$)/u;
+// The leading group is what makes this work: the filter is handed paths RELATIVE
+// to the plugin root, so a top-level `node_modules` or `graphify-out` has no
+// separator in front of it. Without `(^|[\\/])` both slipped through and every
+// install copied the whole dev dependency tree and the graph artifacts into the
+// profile.
+const DEV_ONLY = /(^|[\\/])(node_modules|\.git|graphify-out)([\\/]|$)/u;
 await cp(here, pluginDir, {
   recursive: true,
   // The filter is asked about the root as well, and the root can itself live under a

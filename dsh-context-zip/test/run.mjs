@@ -5568,7 +5568,7 @@ try {
   const pluginRoot = dirname(here);
   const sourceVersion = JSON.parse(await readFile(join(pluginRoot, 'package.json'), 'utf8')).version;
   const probe = await mkdtemp(join(tmpdir(), 'zc-installer-nm-'));
-  const COPY_ONLY = /[\\/](node_modules|\.git|graphify-out)([\\/]|$)/u;
+  const COPY_ONLY = /(^|[\\/])(node_modules|\.git|graphify-out)([\\/]|$)/u;
   const copyTree = (target) =>
     cp(pluginRoot, target, {
       recursive: true,
@@ -5631,6 +5631,25 @@ try {
     }
     is('installer node_modules: 哨兵被真实内容替换', replaced?.version, sourceVersion);
     is('installer node_modules: 留下的 manifest 不是哨兵', manifestText.includes('SENTINEL'), false);
+
+    // 过滤必须挡得住顶层的 `node_modules` 与 `graphify-out`。过滤拿到的路径是相对
+    // 插件根的，顶层这两项前面没有分隔符，旧正则 `[\\/](...)([\\/]|$)` 匹配不到，
+    // 于是每次安装都把整棵开发依赖与图谱产物拷进 profile。副本里显式种两份哨兵，
+    // 这样这条判据不依赖真实仓库此刻有没有这两个目录。
+    const planted = join(probe, 'planted-copy', 'node_modules', 'dsh-context-zip');
+    await copyTree(planted);
+    await mkdir(join(planted, 'graphify-out'), { recursive: true });
+    await writeFile(join(planted, 'graphify-out', 'marker.json'), '{}\n');
+    await mkdir(join(planted, 'node_modules', 'marker'), { recursive: true });
+    await writeFile(join(planted, 'node_modules', 'marker', 'package.json'), '{}\n');
+    is('installer 过滤: 副本里确实种下了 graphify-out', existsSyncSafe(join(planted, 'graphify-out', 'marker.json')), true);
+    is('installer 过滤: 副本里确实种下了 node_modules', existsSyncSafe(join(planted, 'node_modules', 'marker')), true);
+    const plantedProfile = await makeProfile('planted');
+    const plantedRun = runCopy(planted, plantedProfile.profileDir);
+    is('installer 过滤: 从带这两项的副本安装成功', plantedRun.status, 0);
+    is('installer 过滤: 插件本体照常拷进去', existsSyncSafe(join(plantedProfile.pluginDir, 'src', 'transcript.ts')), true);
+    is('installer 过滤: 顶层的 graphify-out 没有进 profile', existsSyncSafe(join(plantedProfile.pluginDir, 'graphify-out')), false);
+    is('installer 过滤: 顶层的 node_modules 没有进 profile', existsSyncSafe(join(plantedProfile.pluginDir, 'node_modules')), false);
     is('installer node_modules: 重定向包已写好', existsSyncSafe(join(fixed.redirectDir, 'package.json')), true);
     is('installer node_modules: 重定向戳已写好', existsSyncSafe(join(fixed.redirectDir, 'base.json')), true);
     let stamp = null;
