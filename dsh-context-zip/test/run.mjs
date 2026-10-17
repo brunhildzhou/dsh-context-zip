@@ -5804,6 +5804,45 @@ try {
     );
   }
 
+  // ── the event types DSH 0.2.1 added to the session log ──────────────────
+  {
+    // Each of these used to fall through to the bare-header default, so a log
+    // that moved its working directory or started a background job read as a run
+    // of empty stubs. The shapes come from the emitters: `working-directory`
+    // appends `{ cwd }`, and the jobs store appends `{ jobId, owner, kind,
+    // label, startedAt }` plus `{ finishedAt, status, cause, detail? }` on
+    // settlement.
+    is(
+      'new events: a working-directory change renders its cwd',
+      renderEvent({ seq: 7, type: 'working-directory/change', data: { cwd: '/work/app' } }),
+      '#7 working-directory/change cwd=/work/app',
+    );
+    is(
+      'new events: a registered job renders its kind and label',
+      renderEvent({ seq: 8, type: 'job/registered', data: { jobId: 'j1', kind: 'bash', label: 'build' } }),
+      '#8 job/registered jobId=j1 kind=bash label=build',
+    );
+    is(
+      'new events: a settled job renders its status',
+      renderEvent({ seq: 9, type: 'job/settled', data: { jobId: 'j1', status: 'completed' } }),
+      '#9 job/settled jobId=j1 status=completed',
+    );
+    is(
+      'new events: a settled job with a detail keeps it',
+      renderEvent({ seq: 10, type: 'job/settled', data: { jobId: 'j1', status: 'killed', detail: 'timeout' } }),
+      '#10 job/settled jobId=j1 status=killed detail=timeout',
+    );
+    // The body is the searchable text: a job with no detail must still be
+    // findable by the label the model saw.
+    is('new events: a job body is its label', eventBody({ type: 'job/registered', data: { label: 'build' } }), 'build');
+    is(
+      'new events: a directory body is its cwd',
+      eventBody({ type: 'working-directory/change', data: { cwd: '/work/app' } }),
+      '/work/app',
+    );
+    is('new events: a job without a label yields nothing', eventBody({ type: 'job/settled', data: {} }), '');
+  }
+
   // ── history_find: the schema the model is handed ────────────────────────
   {
     // `defineTool` normalizes the declaration into JSON Schema, so the checks read

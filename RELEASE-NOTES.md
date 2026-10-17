@@ -1,9 +1,41 @@
 # 发布说明
 
-**版本**：`0.1.9`
-**日期**：2026.09.29（北京时间）
+**版本**：`0.1.10`
+**日期**：2026.10.17（北京时间）
 **对应内部快照**：`内部开发快照`
 **许可**：MIT
+
+## 0.1.10 改了什么
+
+**跟上游 0.2.1 的三处接轨：清单改用 `engines.dsh` 声明宿主兼容性、插件列表补上双语标题与图标、会话记录新增的三种事件不再渲染成空标题。压缩接管、五段式摘要、分段目录、检索工具与设置面板的行为不变。**
+
+### 1. 宿主兼容性改由 `engines.dsh` 声明
+
+- **背景**：宿主 0.2.1 起的 `evaluatePluginCompatibility()` 先看 `engines.dsh`，声明了它就完全忽略 `peerDependencies`，用一条区间决定兼容性；没声明才逐条比对 12 个 `@deepseek-ai/dsh-*` peer。
+- **改法**：`package.json` 的 `engines` 增加 `"dsh": ">=0.1.5-rc.2 <0.2.0-0 || >=0.2.0-rc.2 <0.3.0-0"`。这条区间与原来 12 条 peer 的并集在边界上逐点等价（实测 `0.1.5-rc.1`、`0.1.5-rc.2`、`0.1.6-0`、`0.1.6-alpha.1`、`0.1.7-alpha.1`、`0.1.7-rc.2`、`0.1.9`、`0.2.0-0`、`0.2.0-rc.1`、`0.2.0-rc.2`、`0.2.1-rc.2`、`0.2.9`、`0.3.0-0`、`0.3.0-rc.1` 共 14 个点判定完全相同）。
+- **12 条 peer 保留不动**：0.2.0 及以前的宿主不认 `engines.dsh`，仍然按 peer 判定，删掉会让老宿主失去兼容依据。以后再跨大版本只需改 `engines.dsh` 这一行。
+- **验证**：直接调用宿主 0.2.1 的 `evaluatePluginCompatibility()`：`0.1.7-rc.2`、`0.2.0-rc.2`、`0.2.1-rc.2`、`0.2.5` 通过，`0.3.0-rc.1` 被判不兼容并给出 `engines.dsh` 那条区间。
+
+### 2. 插件列表补上双语标题、说明与图标
+
+- **背景**：0.2.1 的 `dsh-app-boot` 新增 `readPluginMeta()`，从包内 `locale/*.json` 读显示文本、从清单 `icon` 字段或 `<包>/icon` 资源读图标，用于插件列表。缺 `locale/en.json` 时整套元数据都不读。
+- **改法**：新增 `locale/en.json`、`locale/zh.json`（`meta.title` 为 `ContextZip`，`meta.description` 为一段说明），新增 `icon.svg`（64×64 圆角方块加白色 Z，328 字节），`package.json` 增加 `"icon": "./icon.svg"`，`files` 增加 `locale` 与 `icon.svg`，`exports` 增加 `"./locale/*.json": "./locale/*.json"`。
+- **`exports` 那一条是必需的**：元数据按 `dsh-context-zip/locale/en.json` 这类子路径解析，Node 的 `exports` 不放行就解析不到，表现为标题回退成包名、说明为空。
+- **验证**：调用宿主 0.2.1 的 `readPluginMeta('dsh-context-zip', <profile>/package.json)`，返回 `title` 为中英双语 `ContextZip`、`description` 双语齐全、`icon` 为 `data:image/svg+xml;base64,…`，`error` 为空。
+
+### 3. 会话新增的三种事件不再渲染成空标题
+
+- **症状**：0.2.1 在 `KNOWN_SESSION_EVENT_TYPES` 里新增 `job/registered`、`job/settled`、`working-directory/change`。插件的 `renderEvent()` 走 `default` 分支只输出 `#<seq> <type>`，`eventBody()` 返回空串，于是 `history_read`、`/zip-export` 里出现一串没有正文的条目，`history_search` 也搜不到它们。
+- **修法**：`renderEvent()` 新增三例：`job/registered` 输出 `jobId`、`kind`、`label`，`job/settled` 再带 `status` 与可选的 `detail`，`working-directory/change` 输出 `cwd`。`eventBody()` 把 job 事件的 `label` 与目录事件的 `cwd` 作为可检索正文。事件形状取自发射方：`working-directory` 追加 `{ cwd }`，jobs store 追加 `{ jobId, owner, kind, label, startedAt }`，结算时再并入 `{ finishedAt, status, cause, detail? }`。
+- **影响面**：只影响包含这三种事件的会话在读取与导出时的显示文本，事件本身不被改写，压缩语义不变。
+
+### 验证
+
+- **套件**：1403 条全过（0.1.9 是 1396 条，新增 7 条判据覆盖三种新事件的渲染与正文提取）。对着宿主 `0.2.1-rc.2` 的包体跑，夹具由 `install.mjs` 装出。
+- **反向对照**：把 `src/transcript.ts` 的两处新增回退后重建重装，新增的 7 条判据如实变红（`#9 job/settled` 只剩标题、`eventBody` 返回空串等 4 类失败信息），恢复后重新全绿。
+- **`tsc --noEmit`** 零错误。
+- **实机**：宿主 `0.2.1-rc.2` 上的 0.1.9 已正常运行，`/dsh-context-zip/wire` 报 `stale=false`、`patch=ratio-only`、`patchDrift=false`、`attention=null`；本版不改动压缩接管与重定向路径。
+- **图标**：用 Firefox 无头模式渲染 `icon.svg`，蓝底白色 Z 显示正常；双语说明只核了 `readPluginMeta()` 的返回值，插件列表里的实际排版没在真机界面看过。
 
 ## 0.1.9 改了什么
 

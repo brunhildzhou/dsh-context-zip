@@ -1,7 +1,8 @@
 {
   "name": "dsh-context-zip",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Context compaction that keeps its receipts: a five-section handoff summary, a durable segment index, review tools that read compacted text back, optional working notes, and a read-only extraction exit. Mounts as the compaction-basic row's replacement; changes no harness code.",
+  "icon": "./icon.svg",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -21,13 +22,16 @@
     "./engine/prompt": {
       "types": "./engine/lib/types/prompt.d.ts",
       "default": "./engine/lib/prompt.js"
-    }
+    },
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "lib",
     "engine/lib",
     "engine/package.json",
     "redirect",
+    "locale",
+    "icon.svg",
     "install.mjs",
     "cordis.patch.yml",
     "README.md",
@@ -78,6 +82,7 @@
     "typescript": "^5.9.0"
   },
   "engines": {
+    "dsh": ">=0.1.5-rc.2 <0.2.0-0 || >=0.2.0-rc.2 <0.3.0-0",
     "node": "^22.19.0 || >=24.0.0"
   },
   "license": "MIT",

@@ -407,6 +407,16 @@ ${indent(bound(textOf(data.summary)))}`;
 ${indent(bound(textOf(data.todos)))}`;
     case "session/title":
       return `${head} ${String(data.title ?? "")}`;
+    // Background jobs and the working directory belong to the session log from
+    // DSH 0.2.1 on. Without a case each one renders as a bare header, so a log
+    // that moved its own working directory or started a detached job reads as a
+    // run of empty stubs in `history_read` and in the export.
+    case "job/registered":
+      return `${head} jobId=${String(data.jobId ?? "?")} kind=${String(data.kind ?? "?")} label=${String(data.label ?? "")}`;
+    case "job/settled":
+      return `${head} jobId=${String(data.jobId ?? "?")} status=${String(data.status ?? "?")}${data.detail === void 0 ? "" : ` detail=${String(data.detail)}`}`;
+    case "working-directory/change":
+      return `${head} cwd=${String(data.cwd ?? "")}`;
     default:
       return head;
   }
@@ -649,6 +659,14 @@ function eventBody(event) {
       return textOf(data.message?.content);
     case "compaction/summary":
       return textOf(data.summary);
+    // A moved working directory and a job's own label are facts the model has
+    // to be able to find again; they carry no message, so this is the only text
+    // the two shapes have.
+    case "working-directory/change":
+      return typeof data.cwd === "string" ? data.cwd : "";
+    case "job/registered":
+    case "job/settled":
+      return typeof data.label === "string" ? data.label : "";
     default:
       return "";
   }

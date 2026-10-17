@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "ContextZip",
+    "description": "Takes over the harness's built-in compaction summarizer: a fixed five-section handoff summary, a durable segment index, and review tools that read compacted text back by segment or event number."
+  }
+}

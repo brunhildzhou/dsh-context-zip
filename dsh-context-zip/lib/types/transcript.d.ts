@@ -175,7 +175,7 @@ export declare function textOf(blocks: any): string;
  * @param event - a stored event node.
  * @returns its text, or an empty string for a type that carries none.
  */
-export declare function eventBody(event: any): string;
+export declare function eventBody(event: any): any;
 declare const _default: {
     locateAt: typeof locateAt;
     snapWindow: typeof snapWindow;
